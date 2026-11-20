@@ -24,6 +24,10 @@ Prefer not to pipe a script into a shell? Download it, read it (~60 lines), run 
 `uvx infinity-musebird install`. Every real action lives in Python so it is testable
 and identical across platforms.
 
+Release assets ship with `SHA256SUMS`; verify with
+`sha256sum -c SHA256SUMS --ignore-missing`. Each `install.sh` pins the release tag it
+ships in, so the script and the package it installs always match.
+
 > **Before you use this, read [DISCLAIMER.md](DISCLAIMER.md).** This automates a web
 > session on your own account. That may violate Muse's terms of service. Anything you
 > send leaves your machine and is processed in a third-party sandbox. Returned code is
