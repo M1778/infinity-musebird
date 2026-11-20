@@ -1,6 +1,8 @@
 # secrets and sessions
 *.cookies*
-session*
+# Anchored on purpose: a bare `session*` also matched src/musebird/session/.
+/session*
+/session.enc
 .env
 .env.*
 !.env.example
@@ -10,6 +12,7 @@ data/
 *.key
 landing/
 .musebird/
+/dist/
 
 # python
 __pycache__/

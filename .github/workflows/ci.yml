@@ -31,8 +31,12 @@ jobs:
       - name: Type check
         run: uv run pyright
         continue-on-error: true
+      - name: Build wheel
+        run: uv build --wheel .
       - name: Tests
         run: uv run pytest -q
+      - name: Wheel contains every subpackage
+        run: uv run pytest -q tests/test_packaging.py
 
   secret-scan:
     runs-on: ubuntu-latest
