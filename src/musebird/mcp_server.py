@@ -139,6 +139,8 @@ async def muse_job_start(
             raise MuseBirdError("mode must be 'single' or 'fanout'")
         if sync not in ("git", "bundle"):
             raise MuseBirdError("sync must be 'git' or 'bundle'")
+        if not prompt.strip():
+            raise MuseBirdError("prompt must not be empty")
         project_path = (
             Path(project).expanduser().resolve()
             if project
@@ -269,8 +271,21 @@ async def muse_job_message(job_id: str, message: str) -> str:
         path = paths().jobs / f"{job_id}.messages.jsonl"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(message) + "\n")
-        _registry().append_event(job_id, "queued steering message")
-        return _ok("Message queued; the worker will relay it.", job_id=job_id)
+        registry = _registry()
+        registry.append_event(job_id, "queued steering message")
+        resumed = False
+        if job.state == st.NEEDS_INPUT:
+            # Answering the question is what moves the job out of needs_input, and a
+            # fresh worker reattaches to the saved thread rather than restarting the task.
+            registry.update(job_id, state=st.RUNNING, pending_question=None)
+            spawn(job_id)
+            resumed = True
+        return _ok(
+            "Message queued; the job resumes on its saved thread."
+            if resumed else "Message queued; the worker will relay it.",
+            job_id=job_id,
+            resumed=resumed,
+        )
     except Exception as exc:
         return _err(exc)
 

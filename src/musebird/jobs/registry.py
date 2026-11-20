@@ -46,6 +46,8 @@ class Job:
     started_at: float | None = None
     finished_at: float | None = None
     cursor: int = 0
+    messages_sent: int = 0
+    uploads_sent: int = 0
     quota_before: dict | None = None
     quota_after: dict | None = None
     error: str | None = None

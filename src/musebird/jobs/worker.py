@@ -46,10 +46,13 @@ class Worker:
         self.driver = driver
         self.poll = poll
         self.audit = AuditLog(self.paths)
-        self.sent_messages = 0
-        self.sent_uploads = 0
         self._pending_sends: list[asyncio.Task[None]] = []
         self._sent = False
+        # Counters live in the job record so a resumed worker does not replay
+        # messages or attachments that were already relayed.
+        record = self.registry.get(job_id)
+        self.sent_messages = record.messages_sent
+        self.sent_uploads = record.uploads_sent
 
     async def run(self) -> Job:
         job = self.registry.get(self.job_id)
@@ -60,7 +63,10 @@ class Worker:
             session = await driver.ensure_session()
             if not session.valid:
                 raise MuseBirdError("Muse session is not valid", hint="Run `musebird login`.")
-            self.registry.update(job.id, state=st.WAKING)
+            # A resumed job (answered question) is already RUNNING; only a fresh
+            # job moves through WAKING.
+            if self.registry.get(job.id).state == st.QUEUED:
+                self.registry.update(job.id, state=st.WAKING)
             vm = await driver.wake_vm()
             self.registry.append_event(job.id, f"VM: {vm}")
             self._check_cancel()
@@ -166,6 +172,7 @@ class Worker:
             # send is async; keep the task referenced so it cannot be GC'd mid-flight
             self._pending_sends.append(asyncio.ensure_future(driver.send(thread, text, None)))
             self.sent_messages += 1
+            self.registry.update(self.job_id, messages_sent=self.sent_messages)
             self.registry.append_event(self.job_id, "steering message sent", kind="info")
 
     def _flush_uploads(self, driver: MuseDriver, thread: ThreadRef) -> None:
@@ -182,6 +189,7 @@ class Worker:
                 continue
             self._pending_sends.append(asyncio.ensure_future(driver.send(thread, "", files)))
             self.sent_uploads += 1
+            self.registry.update(self.job_id, uploads_sent=self.sent_uploads)
             self.registry.append_event(
                 self.job_id, f"attached {len(files)} file(s)", kind="info"
             )

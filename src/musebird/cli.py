@@ -82,8 +82,12 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "install":
         return _install(args)
     if args.command == "update":
-        return _install(argparse.Namespace(**{**vars(args), "yes": True, "skip_login": True,
-                                              "json": False, "harness": None}))
+        # Same logic as install, but never prompts and never starts a login flow.
+        return _install(
+            argparse.Namespace(dry_run=args.dry_run, skip_login=True, json=False, harness=None)
+            if hasattr(args, "dry_run")
+            else argparse.Namespace(dry_run=False, skip_login=True, json=False, harness=None)
+        )
     if args.command == "uninstall":
         return _uninstall(args)
     if args.command == "login":
@@ -115,7 +119,9 @@ def _dispatch(args: argparse.Namespace) -> int:
 def _install(args: argparse.Namespace) -> int:
     from musebird.installer.installer import install, render
 
-    report = install(harnesses=args.harness, dry_run=args.dry_run)
+    report = install(
+        harnesses=getattr(args, "harness", None), dry_run=getattr(args, "dry_run", False)
+    )
     if getattr(args, "json", False):
         print(json.dumps(report.to_dict(), indent=2))
     else:

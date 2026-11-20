@@ -77,6 +77,16 @@ class MockDriver(MuseDriver):
         self._thread = ThreadRef(id=f"mock-thread-{self.job_id}", url="mock://thread")
         return self._thread
 
+    async def reopen(self, url: str) -> ThreadRef:
+        """Resume an existing thread; a pending question counts as answered."""
+        self._thread = ThreadRef(id=f"mock-thread-{self.job_id}", url=url or "mock://thread")
+        self._sent = True
+        self._finished = False
+        self._rounds = 0
+        if self.scenario == "needs_input":
+            self.scenario = "ok"
+        return self._thread
+
     async def send(self, thread: ThreadRef, text: str, attachments: list[str] | None = None) -> None:
         self._sent = True
         self._rounds = 0
