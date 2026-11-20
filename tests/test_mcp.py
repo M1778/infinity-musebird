@@ -142,3 +142,27 @@ async def _wait_for(session: ClientSession, job_id: str, states: set[str], secon
             return last
         await asyncio.sleep(0.3)
     return last
+
+
+@pytest.mark.asyncio
+async def test_status_never_claims_unverified_validity(sandbox_home):
+    """`valid` stays null until a live probe runs; `stored` is only local state."""
+    from musebird.session.vault import Vault
+
+    Vault(sandbox_home).save({"hatch_sess": "FAKE"}, {})
+    params = StdioServerParameters(
+        command=sys.executable, args=["-m", "musebird", "mcp"], env=_env(sandbox_home.root)
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            status = await _call(session, "muse_status", {"driver": "mock"})
+            assert status["session"]["stored"] is True
+            assert status["session"]["valid"] is None
+            assert "not verified" in status["summary"]
+
+            verified = await _call(
+                session, "muse_status", {"driver": "mock", "selftest": True}
+            )
+            assert verified["session"]["valid"] is True
+            assert "verified" in verified["summary"]

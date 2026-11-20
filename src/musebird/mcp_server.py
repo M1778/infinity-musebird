@@ -82,27 +82,51 @@ def _approve(project: str) -> None:
 # ---------------------------------------------------------------- status/login
 @server.tool()
 async def muse_status(driver: str = "browser", selftest: bool = False) -> str:
-    """Session validity, VM state, quota snapshot and driver health."""
+    """Session validity, VM state, quota snapshot and driver health.
+
+    `selftest` also probes Muse live, so it is the only mode that can say the
+    session is actually valid. Without it the answer is based on what is stored
+    locally, and the summary says so.
+    """
     try:
+        from musebird.session.keepalive import session_summary
+
         vault = Vault()
+        summary_data = session_summary()
         cached = QuotaCache().get()
         result: dict[str, Any] = {
-            "session": {"stored": bool(vault.load()), "backend": vault.backend},
+            # `stored` means local state exists; `valid` stays null until a live
+            # probe runs, because claiming validity we have not checked is a lie.
+            "session": {
+                "stored": summary_data["stored"],
+                "valid": None,
+                "backend": vault.backend,
+                "expires_at": summary_data.get("expires_at"),
+            },
             "quota": cached,
             "driver": driver,
             "jobs": [{"id": j.id, "state": j.state} for j in _registry().list(limit=5)],
         }
+        if not summary_data["stored"]:
+            result["session"]["login_required"] = True
         if selftest:
             d = create_driver(driver, "selftest")
             try:
-                result["session"]["valid"] = (await d.ensure_session()).valid
-                result["checks"] = await d.selftest()
+                state = await d.ensure_session()
+                result["session"]["valid"] = state.valid
+                result["session"]["account"] = state.account
+                result["session"]["detail"] = state.detail
             finally:
                 await d.close()
-        summary = (
-            f"session stored ({vault.backend}); quota: {cached or 'unknown'}; "
-            f"driver: {driver}"
-        )
+        if result["session"].get("valid") is True:
+            status = "signed in (verified)"
+        elif result["session"].get("valid") is False:
+            status = "session expired"
+        elif result["session"]["stored"]:
+            status = "signed in locally (not verified)"
+        else:
+            status = "not signed in"
+        summary = f"{status}; quota: {cached or 'unknown'}; driver: {driver}"
         return _ok(summary, **result)
     except Exception as exc:
         return _err(exc)
