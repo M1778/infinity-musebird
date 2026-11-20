@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from musebird.drivers.mock import MockDriver
 from musebird.jobs import state as st
@@ -124,3 +125,86 @@ async def test_git_landing_never_deletes_existing_files(tmp_path, git_project):
         cwd=git_project, capture_output=True, text=True, check=True,
     ).stdout.splitlines()
     assert diff == [], f"landing branch deletes: {diff}"
+
+
+async def test_bundle_archive_is_extracted_and_verified(tmp_path, git_project):
+    """The fallback path: Muse ships out.tar.gz instead of loose files."""
+    import hashlib
+    import io
+    import json
+    import tarfile
+
+    from musebird.jobs.registry import JobRegistry
+
+    payload = b"bundled content\n"
+    manifest_data = {
+        "files": [
+            {
+                "path": "src/bundled.py",
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size": len(payload),
+                "summary": "from a bundle",
+            }
+        ]
+    }
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tf:
+        for name, data in (
+            ("MANIFEST.json", json.dumps(manifest_data).encode()),
+            ("src/bundled.py", payload),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+    class BundleDriver(MockDriver):
+        async def download(self, thread, dest_dir):
+            target = Path(dest_dir) / "out.tar.gz"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(buffer.getvalue())
+            return [str(target)]
+
+        def files_for_download(self):  # not used: the driver overrides download
+            return {}
+
+    reg = JobRegistry()
+    job = reg.create(prompt="bundle please", project=str(git_project), driver="mock", sync="git")
+    worker = Worker(job.id, registry=reg, driver=BundleDriver(job.id), poll=0.01)
+    final = await worker.run()
+    assert final.state == st.DONE, final.error
+    landed = Path(final.landing_dir)
+    assert (landed / "src" / "bundled.py").read_bytes() == payload
+    assert final.branch
+
+
+async def test_hostile_bundle_fails_without_landing(tmp_path, project):
+    import io
+    import tarfile
+
+    from musebird.jobs.registry import JobRegistry
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tf:
+        info = tarfile.TarInfo("../../escape.txt")
+        info.size = 1
+        tf.addfile(info, io.BytesIO(b"x"))
+
+    class EvilDriver(MockDriver):
+        async def download(self, thread, dest_dir):
+            target = Path(dest_dir) / "out.tar.gz"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(buffer.getvalue())
+            return [str(target)]
+
+        def files_for_download(self):
+            return {}
+
+    reg = JobRegistry()
+    job = reg.create(prompt="evil", project=str(project), driver="mock", sync="bundle")
+    final = await Worker(
+        job.id, registry=reg, driver=EvilDriver(job.id), poll=0.01
+    ).run()
+    assert final.state == st.FAILED
+    assert final.error_code == "guard_violation"
+    assert not (project / "escape.txt").exists()
+    assert not (project.parent / "escape.txt").exists()

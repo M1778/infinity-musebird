@@ -209,6 +209,26 @@ class Worker:
         project = Path(job.project or ".").resolve()
         dest = landing.landing_dir(project, job.id)
         await driver.download(thread, str(dest))
+        # Bundle fallback: if the driver fetched an archive instead of loose files,
+        # extract it safely into the landing area. Traversal, links and size caps are
+        # enforced by sync.bundle; a bad archive fails the job, it never lands.
+        archive = _find_archive(dest)
+        if archive is not None:
+            from musebird.sync import bundle as bundle_mod
+
+            try:
+                bundle_mod.extract(archive, dest / "unpacked")
+            except Exception as exc:
+                self.registry.append_event(
+                    self.job_id, f"bundle rejected: {getattr(exc, 'message', exc)}", kind="error"
+                )
+                self.registry.update(
+                    job.id, state=st.FAILED, error="archive rejected by the guard",
+                    error_code="guard_violation", landing_dir=str(dest),
+                )
+                self.audit.write("job_failed", job=job.id, code="guard_violation")
+                return self.registry.get(job.id)
+            self.registry.append_event(self.job_id, f"extracted {archive.name}")
         found = manifest.find_manifest(dest, muse.MANIFEST_NAME)
         if not found:
             self.registry.update(
@@ -280,6 +300,15 @@ class Worker:
             QuotaCache(self.paths).put(quota.to_dict())
         except Exception:
             pass
+
+
+def _find_archive(root: Path) -> Path | None:
+    """Locate a downloaded result bundle, if the driver produced one."""
+    for pattern in ("*.tar.zst", "*.tzst", "*.tar.gz", "*.tgz", "*.zip", "*.tar"):
+        for candidate in sorted(root.rglob(pattern)):
+            if candidate.is_file():
+                return candidate
+    return None
 
 
 async def run_job(job_id: str, *, driver: MuseDriver | None = None, poll: float = POLL_INTERVAL) -> Job:
