@@ -7,6 +7,7 @@ A driver is a stateful object used by one job worker. All site-specific details
 from __future__ import annotations
 
 import abc
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -84,6 +85,18 @@ class MuseDriver(abc.ABC):
     """
 
     name: str = "base"
+    #: `Callable[[str], None] | None`, set through set_progress_hook().
+    _on_progress: Callable[[str], None] | None = None
+
+    def set_progress_hook(self, hook: Callable[[str], None] | None) -> None:
+        """Set (or clear) the callback used by `notify`. The worker sets this once."""
+        self._on_progress = hook
+
+    def notify(self, message: str) -> None:
+        """Report progress to whoever is driving this job, if anyone is."""
+        hook = getattr(self, "_on_progress", None)
+        if hook is not None:
+            hook(message)
 
     @abc.abstractmethod
     async def ensure_session(self) -> SessionState: ...

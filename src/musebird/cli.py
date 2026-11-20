@@ -49,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor", help="plain pass/fail checklist for each component")
     doc.add_argument("--selftest", action="store_true", help="probe live selectors (needs login)")
     doc.add_argument("--json", action="store_true")
+    doc.add_argument(
+        "--fix", action="store_true",
+        help="clear a browser profile lock left by a crashed process",
+    )
 
     jobs = sub.add_parser("jobs", help="inspect and cancel jobs")
     jobs_sub = jobs.add_subparsers(dest="jobs_command", required=True)
@@ -217,6 +221,19 @@ def _status(args: argparse.Namespace) -> int:
 
 def _doctor(args: argparse.Namespace) -> int:
     from musebird.installer.installer import doctor
+
+    if getattr(args, "fix", False):
+        from musebird.browser_lock import force_unlock
+        from musebird.config import paths as _paths
+
+        try:
+            cleared = force_unlock(_paths().browser_profile)
+            print("cleared: " + (", ".join(cleared) if cleared else "nothing to clear"))
+        except MuseBirdError as exc:
+            print(f"error: {exc.message}", file=sys.stderr)
+            if exc.hint:
+                print(f"fix: {exc.hint}", file=sys.stderr)
+            return 2
 
     checks = doctor(selftest=args.selftest)
     if args.json:

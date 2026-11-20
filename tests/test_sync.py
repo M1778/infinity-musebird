@@ -151,3 +151,17 @@ def test_unlisted_files_are_reported(tmp_path):
     (tmp_path / "sneaky.sh").write_text("rm -rf /")
     entries = [manifest.Entry("a.txt", hashlib.sha256(b"x").hexdigest(), 1)]
     assert manifest.find_unlisted(tmp_path, entries) == ["sneaky.sh"]
+
+
+def test_bundle_and_duplicate_manifest_are_not_unlisted(tmp_path):
+    """A bundle next to the extracted manifest is a transport, not an unlisted file."""
+    (tmp_path / "hello.txt").write_text("x")
+    (tmp_path / "MANIFEST.json").write_text("{}")
+    (tmp_path / "out.tar.gz").write_bytes(b"bundle")
+    entries = [manifest.Entry("hello.txt", hashlib.sha256(b"x").hexdigest(), 1)]
+    # The worker knows what it downloaded, so it names the transports explicitly.
+    assert manifest.find_unlisted(tmp_path, entries, known_extra={"out.tar.gz"}) == []
+    (tmp_path / "sneaky.sh").write_text("rm -rf /")
+    assert manifest.find_unlisted(
+        tmp_path, entries, known_extra={"out.tar.gz"}
+    ) == ["sneaky.sh"]

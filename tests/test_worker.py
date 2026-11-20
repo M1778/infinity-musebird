@@ -226,3 +226,81 @@ async def test_quota_failure_does_not_stop_a_job(tmp_path, project):
     assert final.state == st.DONE
     assert final.quota_before is None
     assert final.quota_after is None
+
+
+async def test_thread_url_is_persisted_after_send(tmp_path, project):
+    """Resume needs the post-send URL, not the /thread/new alias."""
+    class UrlDriver(MockDriver):
+        async def send(self, thread, text, attachments=None):
+            await super().send(thread, text, attachments)
+            thread.url = "https://muse.ai/thread/real-id-123"
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    final = await Worker(job.id, registry=reg, driver=UrlDriver(job.id), poll=0.01).run()
+    assert final.thread_url == "https://muse.ai/thread/real-id-123"
+
+
+async def test_completion_with_no_files_fails_loudly(tmp_path, project):
+    """An empty landing directory must never be reported as success."""
+    class NoFilesDriver(MockDriver):
+        def files_for_download(self):
+            return {}
+
+        async def download(self, thread, dest_dir):
+            return []
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    final = await Worker(
+        job.id, registry=reg, driver=NoFilesDriver(job.id), poll=0.01
+    ).run()
+    assert final.state == st.FAILED
+    assert final.error_code == "no_output"
+    assert "no retrievable files" in (final.error or "")
+
+
+async def test_extracted_manifest_wins_over_a_loose_copy(tmp_path, git_project):
+    """A bundle plus a separately attached MANIFEST.json must not confuse the root."""
+    import hashlib
+    import io
+    import json
+    import tarfile
+
+    payload = b"hello\n"
+    inner = {
+        "files": [
+            {
+                "path": "hello.txt",
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size": len(payload),
+            }
+        ]
+    }
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tf:
+        for name, data in (
+            ("hello.txt", payload),
+            ("MANIFEST.json", json.dumps(inner).encode()),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+    class BundleDriver(MockDriver):
+        async def download(self, thread, dest_dir):
+            d = Path(dest_dir)
+            (d / "out.tar.gz").write_bytes(buffer.getvalue())
+            (d / "MANIFEST.json").write_text(json.dumps(inner))
+            return [str(d / "out.tar.gz"), str(d / "MANIFEST.json")]
+
+        def files_for_download(self):
+            return {}
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(git_project), driver="mock", sync="git")
+    final = await Worker(
+        job.id, registry=reg, driver=BundleDriver(job.id), poll=0.01
+    ).run()
+    assert final.state == st.DONE, final.error
+    assert (Path(final.landing_dir) / "hello.txt").read_bytes() == payload

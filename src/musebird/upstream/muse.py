@@ -64,7 +64,15 @@ SELECTORS = {
     "agent_bubble": 'div[class*="hatch-agent-bubble-bg"]',
     "hydration": "[data-hatch-shell-hydration-state]",
     "hydration_ready": "hydrated",
+    # Verified live 2026-11-21. A file the agent produces renders as a *card* whose
+    # data-testid suffix is hex(utf8(sandbox_path)); the card has no href and no
+    # download attribute, so bytes only come from clicking into the editor and
+    # using its Download control.
     "attachment": '[data-testid^="hatch-chat-attachment-presentation-"]',
+    "file_card": '[data-testid^="hatch-chat-file-card-"]',
+    "file_editor": '[data-testid^="hatch-file-editor"]',
+    "file_editor_download": '[data-testid="hatch-file-editor-unsupported-download"]',
+    "file_editor_more": '[data-testid="hatch-file-editor-more-actions"]',
     "composer": "textarea",
     # Verified 2026-11-21: Muse's composer has no send button. Enter submits, the
     # composer clears, and the URL becomes /thread/<uuid>. Clicking a button with a
@@ -90,6 +98,11 @@ SELECTORS = {
 SETTINGS_LABELS = ("Settings", "設定", "设置")
 LOGIN_HINTS = ("log in", "sign in", "create an account", "use another account")
 
+# File-card testids encode the sandbox path as hex(utf8(path)), e.g.
+# hatch-chat-file-card-776f726b... -> workspace/your_files/out.tar.gz. That gives the
+# filename without any API call.
+FILE_CARD_PREFIX = "hatch-chat-file-card-"
+
 # Plausible values Muse reports; used only to normalise, never to hard-code.
 PLAN_NAMES = ("Free", "Power", "Maximum")
 
@@ -97,3 +110,4 @@ POLL_INTERVAL_S = 0.15
 STABLE_POLLS_DONE = 4
 STALL_GIVE_UP_S = 45
 QUOTA_CACHE_S = 1800
+DOWNLOAD_TIMEOUT_MS = 30_000

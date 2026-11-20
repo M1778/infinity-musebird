@@ -240,6 +240,21 @@ def doctor(*, selftest: bool = False, paths_: Paths | None = None, live: bool = 
         Check("quota cache", True, "run `musebird status` to refresh" if not p.quota_cache.exists() else "cached")
     )
 
+    from musebird.browser_lock import lock_status
+
+    lock = lock_status(p.browser_profile)
+    if lock["held"]:
+        checks.append(
+            Check(
+                "browser profile free",
+                False,
+                f"in use by pid {lock['pid']}" if lock["pid"] else "in use",
+                "Wait for the running job, or `musebird jobs list` then cancel it.",
+            )
+        )
+    else:
+        checks.append(Check("browser profile free", True, "available"))
+
     stale = _stale_jobs(p)
     checks.append(
         Check("no stuck jobs", not stale, ", ".join(stale) if stale else "none",

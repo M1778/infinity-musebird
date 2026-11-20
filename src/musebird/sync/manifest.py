@@ -105,21 +105,24 @@ def verify(root: Path, entries: list[Entry]) -> VerifyResult:
     return VerifyResult(entries=entries, verified=verified, mismatched=mismatched)
 
 
-def find_unlisted(root: Path, entries: list[Entry]) -> list[str]:
-    """Files present in the landing area but absent from the manifest.
+def find_unlisted(
+    root: Path, entries: list[Entry], *, known_extra: set[str] | None = None
+) -> list[str]:
+    """Files present in the manifest's own directory but not listed by it.
 
-    These would otherwise be committed to the review branch unverified.
+    Only the manifest's directory is inspected: the landing area also holds the
+    downloaded bundle and a copy of the manifest, which are transports, not results.
+    `known_extra` names files the caller already accounts for.
     """
     listed = {e.path for e in entries}
-    found = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root).as_posix()
-        if rel == "MANIFEST.json" or rel in listed:
-            continue
-        found.append(rel)
-    return found
+    extra = {"MANIFEST.json"} | (known_extra or set())
+    return [
+        path.relative_to(root).as_posix()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+        and path.relative_to(root).as_posix() not in listed
+        and path.relative_to(root).as_posix() not in extra
+    ]
 
 
 def find_manifest(root: Path, name: str = "MANIFEST.json") -> Path | None:

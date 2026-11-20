@@ -59,6 +59,12 @@ class Worker:
         self.audit.write("job_start", job=job.id, mode=job.mode, agents=job.agents,
                          prompt_sha256=prompt_hash(job.prompt), files=job.upload_paths)
         driver = self.driver or create_driver(job.driver, job.id)
+        # Drivers report progress mid-step (e.g. each downloaded file) through
+        # notify(), which lands in this job's event log.
+        def _progress(message: str) -> None:
+            self.registry.append_event(job.id, message)
+
+        driver.set_progress_hook(_progress)
         try:
             session = await driver.ensure_session()
             if not session.valid:
@@ -79,6 +85,10 @@ class Worker:
                 prompt = build_prompt(job.prompt, job.id, mode=job.mode, agents=job.agents)
                 await driver.send(thread, prompt, job.upload_paths or None)
                 self._sent = True
+                # The driver learns the real /thread/<id> only after the first send
+                # (Muse rewrites /thread/new on submit). Persist it now, or resume
+                # would reopen a blank thread.
+                self.registry.update(job.id, thread_url=thread.url or None)
                 self.registry.append_event(job.id, "prompt sent to Muse")
             finished = await self._pump(driver, thread)
             if not finished:
@@ -209,7 +219,13 @@ class Worker:
         job = self.registry.get(self.job_id)
         project = Path(job.project or ".").resolve()
         dest = landing.landing_dir(project, job.id)
-        await driver.download(thread, str(dest))
+        downloaded = await driver.download(thread, str(dest))
+        # The bundle and the manifest itself are transports, not results: remember
+        # their relative names so the unlisted-file check does not flag them.
+        transport: set[str] = set()
+        for raw in downloaded:
+            with contextlib.suppress(ValueError):
+                transport.add(Path(raw).resolve().relative_to(dest.resolve()).as_posix())
         # Bundle fallback: if the driver fetched an archive instead of loose files,
         # extract it safely into the landing area. Traversal, links and size caps are
         # enforced by sync.bundle; a bad archive fails the job, it never lands.
@@ -230,20 +246,52 @@ class Worker:
                 self.audit.write("job_failed", job=job.id, code="guard_violation")
                 return self.registry.get(job.id)
             self.registry.append_event(self.job_id, f"extracted {archive.name}")
-        found = manifest.find_manifest(dest, muse.MANIFEST_NAME)
+        # Look inside the extracted bundle first: a separately attached MANIFEST.json
+        # sits beside it and would otherwise be mistaken for the results root.
+        extracted = dest / "unpacked"
+        found = (
+            manifest.find_manifest(extracted, muse.MANIFEST_NAME)
+            if extracted.is_dir()
+            else None
+        ) or manifest.find_manifest(dest, muse.MANIFEST_NAME)
         if not found:
+            landed = [p for p in dest.rglob("*") if p.is_file()]
+            if not landed:
+                # Nothing came back at all. Reporting `done` here would hand the user
+                # an empty success, which is the worst possible outcome.
+                self.registry.append_event(
+                    self.job_id,
+                    "Muse finished but no files were retrievable (no attachments and "
+                    "no manifest)",
+                    kind="error",
+                )
+                self.registry.update(
+                    job.id, state=st.FAILED,
+                    error=(
+                        "Muse reported completion but attached no retrievable files. "
+                        "Open the thread to see what it produced."
+                    ),
+                    error_code="no_output",
+                    landing_dir=str(dest),
+                )
+                self.audit.write("job_failed", job=job.id, code="no_output")
+                return self.registry.get(job.id)
             self.registry.update(
                 job.id,
                 state=st.DONE,
                 landing_dir=str(dest),
                 quota_after=(await self._safe_quota(driver)),
             )
-            self.registry.append_event(job.id, f"no manifest; raw files in {dest}", kind="info")
-            self.audit.write("job_done", job=job.id, manifest=False)
+            self.registry.append_event(
+                job.id, f"no manifest; {len(landed)} raw file(s) in {dest}", kind="info"
+            )
+            self.audit.write("job_done", job=job.id, manifest=False, files=len(landed))
             return self.registry.get(job.id)
         entries = manifest.load(found)
         result = manifest.verify(found.parent, entries)
-        unlisted = manifest.find_unlisted(found.parent, entries)
+        unlisted = manifest.find_unlisted(
+            found.parent, entries, known_extra=transport
+        )
         # `out/` is the workspace root Muse was told to use; its *contents* are what
         # lands in the project, so the manifest's directory is the review root.
         source = found.parent

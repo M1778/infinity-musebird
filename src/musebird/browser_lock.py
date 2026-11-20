@@ -72,11 +72,17 @@ class ProfileLock:
             if time.monotonic() >= deadline:
                 os.close(self._fd)
                 self._fd = None
+                holder = ""
+                with contextlib.suppress(OSError):
+                    raw = self.path.read_text(encoding="utf-8", errors="replace").strip()
+                    holder = f" (pid {raw})" if raw.isdigit() else ""
                 raise DriverUnavailable(
-                    "another musebird process is using the browser profile",
+                    f"the Muse browser profile is busy{holder}",
                     hint=(
-                        "Wait for the running job to finish, or run "
-                        "`musebird jobs list` and cancel it."
+                        "Another job or `musebird login` is using the profile. Wait for it, "
+                        "or run `musebird jobs list` then `musebird jobs cancel <id>`. "
+                        "If no job is running, a crashed browser left a lock behind: "
+                        "`musebird doctor` reports it and `musebird doctor --fix` clears it."
                     ),
                 )
             time.sleep(self.poll)
@@ -113,3 +119,47 @@ class ProfileLock:
         with contextlib.suppress(OSError):
             os.close(self._fd)
         self._fd = None
+
+
+def force_unlock(profile: Path) -> list[str]:
+    """Break a lock left by a crashed process, refusing while a browser is alive.
+
+    Called only from an explicit user action (`musebird doctor --fix`), never from a
+    job: silently stealing a live profile would corrupt two sessions at once.
+    """
+    if lock_status(profile)["held"]:
+        lock = profile.parent / (profile.name + ".lock")
+        holder = None
+        with contextlib.suppress(OSError):
+            raw = lock.read_text(encoding="utf-8", errors="replace").strip()
+            holder = int(raw) if raw.isdigit() else None
+        if holder is not None:
+            try:
+                os.kill(holder, 0)
+                raise DriverUnavailable(
+                    f"refusing to break the lock: pid {holder} is still running",
+                    hint="Wait for that process, or stop it yourself first.",
+                )
+            except (ProcessLookupError, PermissionError):
+                pass
+    return clear_stale_singletons(profile)
+
+
+def lock_status(profile: Path) -> dict:
+    """Who holds the profile lock, for `musebird doctor` and job errors."""
+    lock = profile.parent / (profile.name + ".lock")
+    info: dict = {"path": str(lock), "exists": lock.exists(), "pid": None, "held": False}
+    if not lock.exists():
+        return info
+    try:
+        raw = lock.read_text(encoding="utf-8", errors="replace").strip()
+        info["pid"] = int(raw) if raw.isdigit() else None
+    except OSError:
+        pass
+    probe = ProfileLock(profile, timeout=0.05, poll=0.01)
+    try:
+        probe.__enter__()
+        probe.__exit__()
+    except Exception:
+        info["held"] = True
+    return info

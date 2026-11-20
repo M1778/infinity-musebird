@@ -48,6 +48,7 @@ class BrowserDriver(MuseDriver):
         self._bubble_count: int | None = None
         self._stable = 0
         self._profile_lock = None
+        self._filenames: list[str] = []
 
     # -- lifecycle -------------------------------------------------------
     async def _launch(self) -> None:
@@ -127,9 +128,29 @@ class BrowserDriver(MuseDriver):
             with contextlib.suppress(Exception):
                 await self._ctx.add_cookies([cookie])
 
+    async def _refresh_vault_from_profile(self) -> None:
+        """Copy the profile's current cookies back into the vault.
+
+        Muse rotates `hatch_sess` during a session, so a vault captured at login
+        time goes stale while the persistent profile stays valid. The profile is the
+        source of truth; the vault is a durable copy of it.
+        """
+        with contextlib.suppress(Exception):
+            jar = await self._ctx.cookies([muse.SITE])
+            cookies = {
+                str(c.get("name")): str(c.get("value"))
+                for c in jar
+                if c.get("name") and c.get("value")
+            }
+            if all(n in cookies for n in muse.SESSION_COOKIES):
+                meta = (self.vault.load() or {}).get("meta") or {}
+                self.vault.save(cookies, meta)
+
     async def ensure_session(self) -> SessionState:
         await self._launch()
         resp = await self._page.request.get(muse.SESSION_API, timeout=TIMEOUT)
+        if resp.ok:
+            await self._refresh_vault_from_profile()
         if resp.status in (401, 403):
             raise LoginRequired("Muse session expired", hint="Run `musebird login`.")
         try:
@@ -260,12 +281,15 @@ class BrowserDriver(MuseDriver):
                     await button.click(timeout=5000)
         # Persist the real thread id: /thread/new is replaced by /thread/<uuid> on
         # the first send, and resume needs the stable URL, not the alias.
+        # Muse rewrites /thread/new once the first message is accepted. Poll long
+        # enough to catch it (a slow first turn can take several seconds), then keep
+        # the alias only if it truly never changed.
         with contextlib.suppress(Exception):
-            for _ in range(10):
+            for _ in range(40):
                 if not page.url.rstrip("/").endswith("/thread/new"):
                     thread.url = page.url
                     return
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.5)
 
     async def _attach(self, files: list[str]) -> None:
         try:
@@ -392,37 +416,120 @@ class BrowserDriver(MuseDriver):
             await asyncio.sleep(0.5)
 
     async def download(self, thread: ThreadRef, dest_dir: str) -> list[str]:
-        """Download attachments rendered in the conversation via in-page fetch."""
+        """Retrieve produced files by driving Muse's file cards.
+
+        Verified live 2026-11-21: an agent-produced file renders as a clickable card
+        (`hatch-chat-file-card-<hex path>`) with no href. Clicking opens an in-app
+        editor whose Download control fires a real Playwright download event. The
+        `blob:`/media `fetch()` trick only works for image/video attachments, so it
+        stays as a secondary path, not the primary one.
+        """
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
         await self._scroll_to_bottom()
+
+        written: list[str] = []
+        written.extend(await self._download_file_cards(dest))
+        written.extend(await self._download_media(dest))
+        if written:
+            self._filenames = [Path(p).name for p in written]
+        return written
+
+    async def _download_file_cards(self, dest: Path) -> list[str]:
+        """Click each file card, save its download, close the editor."""
+        page = self._page
+        written: list[str] = []
+        cards = page.locator(muse.SELECTORS["file_card"])
+        count = 0
+        # Cards can render a moment after the completion sentence, so give them a
+        # short window instead of concluding "no files" from the first look.
+        for _ in range(15):
+            try:
+                count = await cards.count()
+            except Exception:
+                count = 0
+            if count:
+                break
+            await asyncio.sleep(0.4)
+        if not count:
+            return written
+        for index in range(count):
+            # Re-resolve each iteration: the editor overlays the list between saves.
+            card = page.locator(muse.SELECTORS["file_card"]).nth(index)
+            name = await self._card_filename(card) or f"file-{index}"
+            try:
+                await card.click(timeout=10_000)
+                await page.locator(muse.SELECTORS["file_editor"]).first.wait_for(
+                    timeout=10_000
+                )
+                button = page.locator(muse.SELECTORS["file_editor_download"]).first
+                if not await button.count():
+                    # Text files have no direct Download: it lives in the more menu.
+                    await page.locator(muse.SELECTORS["file_editor_more"]).first.click(
+                        timeout=5_000
+                    )
+                    button = page.get_by_role("menuitem", name="Download").first
+                async with page.expect_download(timeout=muse.DOWNLOAD_TIMEOUT_MS) as info:
+                    await button.click()
+                download = await info.value
+                target = dest / _safe_name(download.suggested_filename or name)
+                await download.save_as(target)
+                written.append(str(target))
+                self.notify(f"downloaded {target.name}")
+            except Exception as exc:
+                # One unreadable card must not lose the others.
+                self.notify(f"could not download {name}: {type(exc).__name__}")
+            finally:
+                with contextlib.suppress(Exception):
+                    await page.keyboard.press("Escape")
+                    await asyncio.sleep(0.2)
+        return written
+
+    async def _card_filename(self, card) -> str | None:
+        """The sandbox filename encoded in the card's data-testid, else its text."""
+        with contextlib.suppress(Exception):
+            testid = await card.get_attribute("data-testid") or ""
+            suffix = testid.removeprefix(muse.FILE_CARD_PREFIX)
+            if suffix:
+                try:
+                    path = bytes.fromhex(suffix).decode("utf-8")
+                    return Path(path).name
+                except (ValueError, UnicodeDecodeError):
+                    pass
+        with contextlib.suppress(Exception):
+            text = (await card.inner_text()).strip().splitlines()[0]
+            if text:
+                return text
+        return None
+
+
+    async def _download_media(self, dest: Path) -> list[str]:
+        """Images/videos: fetch the media URL inside the page and decode it."""
+        page = self._page
         try:
-            blobs = await self._page.eval_on_selector_all(
+            blobs = await page.eval_on_selector_all(
                 muse.SELECTORS["attachment"],
                 """els => els.map(e => {
-                    // Any element carrying a downloadable URL wins: an <a download>,
-                    // a blob: link, or media. Files (tar/zip/manifest) usually attach
-                    // as a plain link, not an <img>, so check links before media.
-                    const a = e.querySelector('a[download]');
-                    if (a && a.href) return {name: a.download || a.innerText, url: a.href};
-                    const link = e.querySelector('a[href^="blob:"], a[href^="http"]');
-                    if (link) return {name: link.download || link.innerText,
-                                      url: link.href};
-                    const m = e.querySelector('video, img');
-                    if (m && (m.currentSrc || m.src)) {
-                        return {name: m.download || e.innerText, url: m.currentSrc || m.src};
-                    }
-                    return null;
+                    // File cards render a static icon (/_next/static/...png) next to
+                    // the filename. Fetching that icon produced a PNG saved as
+                    // "out.tar.gz", so cards are handled only by the card path.
+                    if (e.querySelector('[data-testid^="hatch-chat-file-card-"]')) return null;
+                    const m = e.querySelector('video, a[href^="blob:"], img');
+                    if (!m) return null;
+                    const url = m.currentSrc || m.src || m.href || '';
+                    if (!url || url.includes('/_next/static/')) return null;
+                    return {name: (m.download || e.innerText || 'media').trim(), url};
                 }).filter(Boolean)""",
             )
         except Exception:
-            blobs = []
+            return []
         written: list[str] = []
         for item in blobs or []:
-            name = _safe_name(item.get("name", "attachment"))
             url = item.get("url", "")
+            if not url:
+                continue
             try:
-                b64 = await self._page.evaluate(
+                b64 = await page.evaluate(
                     """async (url) => {
                         const r = await fetch(url); const b = await r.arrayBuffer();
                         let s = ''; const u = new Uint8Array(b);
@@ -435,7 +542,7 @@ class BrowserDriver(MuseDriver):
                 data = base64.b64decode(b64)
             except Exception:
                 continue
-            target = dest / name
+            target = dest / _safe_name(item.get("name", "media"))
             target.write_bytes(data)
             written.append(str(target))
         return written

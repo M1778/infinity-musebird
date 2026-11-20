@@ -101,7 +101,7 @@ def test_profile_lock_is_exclusive(tmp_path):
         second = ProfileLock(profile, timeout=0.2, poll=0.05)
         with pytest.raises(Exception) as exc:
             second.__enter__()
-        assert "another musebird process" in str(exc.value)
+        assert "browser profile is busy" in str(exc.value)
     finally:
         first.__exit__()
     # released: a new lock acquires immediately
@@ -134,3 +134,50 @@ def test_live_singleton_is_left_alone(tmp_path):
     os.symlink(f"host-{os.getpid()}", profile / "SingletonLock")
     clear_stale_singletons(profile)
     assert (profile / "SingletonLock").is_symlink()
+
+
+def test_lock_status_reports_holder(tmp_path):
+    from musebird.browser_lock import ProfileLock, lock_status
+
+    profile = tmp_path / "bp"
+    profile.mkdir()
+    status = lock_status(profile)
+    assert status["held"] is False
+
+    held = ProfileLock(profile, timeout=1)
+    held.__enter__()
+    try:
+        status = lock_status(profile)
+        assert status["held"] is True
+        assert status["pid"] == __import__("os").getpid()
+    finally:
+        held.__exit__()
+
+
+def test_force_unlock_refuses_a_live_holder(tmp_path):
+    """Never steal a profile from a running process; only break dead locks."""
+    from musebird.browser_lock import ProfileLock, force_unlock
+    from musebird.errors import DriverUnavailable
+
+    profile = tmp_path / "bp2"
+    profile.mkdir()
+    held = ProfileLock(profile, timeout=1)
+    held.__enter__()
+    try:
+        with pytest.raises(DriverUnavailable) as exc:
+            force_unlock(profile)
+        assert "still running" in exc.value.message
+    finally:
+        held.__exit__()
+
+
+def test_force_unlock_clears_a_dead_lock(tmp_path):
+    import os
+
+    from musebird.browser_lock import force_unlock
+
+    profile = tmp_path / "bp3"
+    profile.mkdir()
+    os.symlink("host-999999999", profile / "SingletonLock")
+    cleared = force_unlock(profile)
+    assert "SingletonLock" in cleared
