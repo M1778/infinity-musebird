@@ -153,8 +153,10 @@ async def test_status_never_claims_unverified_validity(sandbox_home):
     params = StdioServerParameters(
         command=sys.executable, args=["-m", "musebird", "mcp"], env=_env(sandbox_home.root)
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
+    async with (
+        stdio_client(params) as (read, write),
+        ClientSession(read, write) as session,
+    ):
             await session.initialize()
             status = await _call(session, "muse_status", {"driver": "mock"})
             assert status["session"]["stored"] is True

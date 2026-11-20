@@ -29,11 +29,11 @@ Live tests are marked `@pytest.mark.live` and are skipped by default.
 ## Checks before a PR
 
 ```bash
-ruff check .
-ruff format --check .
-pyright
-pytest
+./scripts/check.sh
 ```
+
+That runs ruff, pyright, a wheel build, the full test suite, and the repository
+secret scan — the same set as CI. `./scripts/check.sh --fast` skips the wheel build.
 
 The CI runs the same on Linux, macOS and Windows. If you change an installer
 adapter, update `docs/HARNESS_NOTES.md` with the docs URL and date you verified it
