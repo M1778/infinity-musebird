@@ -53,9 +53,11 @@ say "Using $($found_uv --version)"
 # Prefer the published wheel; fall back to the git tag so the script works before
 # the first PyPI release. Both are version-pinned.
 say "Installing infinity-musebird ${MUSEBIRD_VERSION}..."
-if ! "$found_uv" tool install --force "infinity-musebird==${MUSEBIRD_VERSION}" 2>/dev/null; then
+# [all] pulls Playwright and keyring: without them `musebird login` and the
+# browser driver cannot run.
+if ! "$found_uv" tool install --force "infinity-musebird[all]==${MUSEBIRD_VERSION}" 2>/dev/null; then
   "$found_uv" tool install --force \
-    "infinity-musebird @ git+https://github.com/${REPO}.git@v${MUSEBIRD_VERSION}"
+    "infinity-musebird[all] @ git+https://github.com/${REPO}.git@v${MUSEBIRD_VERSION}"
 fi
 
 MUSEBIRD_BIN="$("$found_uv" tool dir 2>/dev/null)/infinity-musebird/bin/musebird"

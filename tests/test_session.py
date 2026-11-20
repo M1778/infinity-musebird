@@ -73,3 +73,30 @@ def test_session_summary(sandbox_home):
     Vault(sandbox_home).save({"hatch_sess": "FAKE"}, {"account": "me"})
     summary = session_summary(sandbox_home)
     assert summary["stored"] is True and summary["account"] == "me"
+
+
+def test_logout_clears_session_and_browser_profile(sandbox_home):
+    import asyncio
+
+    from musebird.session.login import logout
+
+    Vault(sandbox_home).save({"hatch_sess": "FAKE"}, {})
+    profile = sandbox_home.browser_profile
+    profile.mkdir(parents=True)
+    (profile / "Cookies").write_text("jar")
+
+    assert asyncio.run(logout(paths_=sandbox_home)) is True
+    assert Vault(sandbox_home).load() is None
+    assert not profile.exists()
+
+
+def test_logout_can_keep_profile(sandbox_home):
+    import asyncio
+
+    from musebird.session.login import logout
+
+    Vault(sandbox_home).save({"hatch_sess": "FAKE"}, {})
+    profile = sandbox_home.browser_profile
+    profile.mkdir(parents=True)
+    asyncio.run(logout(paths_=sandbox_home, keep_profile=True))
+    assert profile.exists()

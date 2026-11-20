@@ -39,9 +39,9 @@ if (-not $uv) {
 Say "Using $(& $uv --version)"
 
 Say "Installing infinity-musebird $MusebirdVersion..."
-& $uv tool install --force "infinity-musebird==$MusebirdVersion"
+& $uv tool install --force "infinity-musebird[all]==$MusebirdVersion"
 if ($LASTEXITCODE -ne 0) {
-    & $uv tool install --force "infinity-musebird @ git+https://github.com/$Repo.git@v$MusebirdVersion"
+    & $uv tool install --force "infinity-musebird[all] @ git+https://github.com/$Repo.git@v$MusebirdVersion"
     if ($LASTEXITCODE -ne 0) { Fail "package installation failed" }
 }
 

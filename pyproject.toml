@@ -21,7 +21,9 @@ classifiers = [
 ]
 dependencies = [
   "mcp>=2.3,<3",
-  "httpx>=0.27",
+  # Session cookies are encrypted at rest with AES-GCM. Without this the vault
+  # falls back to a 0600 plaintext file and `doctor` reports it.
+  "cryptography>=43",
 ]
 
 [project.optional-dependencies]

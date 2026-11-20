@@ -40,7 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("login", help="sign in to Muse once in a browser")
     lg.add_argument("--timeout", type=int, default=600)
 
-    sub.add_parser("logout", help="delete the stored session")
+    lo = sub.add_parser("logout", help="delete the stored session and browser profile")
+    lo.add_argument("--keep-profile", action="store_true", help="keep the browser profile")
 
     st = sub.add_parser("status", help="show session, quota and recent jobs")
     st.add_argument("--json", action="store_true")
@@ -95,8 +96,8 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "logout":
         from musebird.session.login import logout
 
-        removed = asyncio.run(logout())
-        print("Session deleted." if removed else "No stored session.")
+        removed = asyncio.run(logout(keep_profile=args.keep_profile))
+        print("Session and browser profile deleted." if removed else "No stored session.")
         return 0
     if args.command == "status":
         return _status(args)
