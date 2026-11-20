@@ -17,8 +17,10 @@ from musebird.upstream import muse
 
 
 def test_side_chat_surface_is_configured():
-    assert muse.SIDE_CHAT_BUTTON
-    assert muse.SIDE_CHAT_LABELS
+    # Verified live 2026-11-21: /thread/new is a side chat; the marker is what we
+    # assert on, so a renamed control fails closed instead of landing in main chat.
+    assert muse.SIDE_CHAT_MARKERS
+    assert "Back to main chat" in muse.SIDE_CHAT_MARKERS[0]
     assert "side_chat_marker" in muse.SELECTORS
 
 
@@ -85,3 +87,50 @@ def test_driver_refuses_to_resume_a_non_side_chat(monkeypatch):
     with pytest.raises(UpstreamError) as exc:
         asyncio.run(d.reopen("https://muse.ai/thread/main"))
     assert "not a side chat" in exc.value.message
+
+
+def test_profile_lock_is_exclusive(tmp_path):
+    """Two browser sessions must not share one profile: the second waits/fails."""
+    from musebird.browser_lock import ProfileLock
+
+    profile = tmp_path / "browser-profile"
+    profile.mkdir()
+    first = ProfileLock(profile, timeout=1)
+    first.__enter__()
+    try:
+        second = ProfileLock(profile, timeout=0.2, poll=0.05)
+        with pytest.raises(Exception) as exc:
+            second.__enter__()
+        assert "another musebird process" in str(exc.value)
+    finally:
+        first.__exit__()
+    # released: a new lock acquires immediately
+    third = ProfileLock(profile, timeout=1)
+    third.__enter__()
+    third.__exit__()
+
+
+def test_stale_singleton_from_a_dead_pid_is_cleared(tmp_path):
+    import os
+
+    from musebird.browser_lock import clear_stale_singletons
+
+    profile = tmp_path / "p"
+    profile.mkdir()
+    dead_pid = 999_999_999
+    os.symlink(f"host-{dead_pid}", profile / "SingletonLock")
+    removed = clear_stale_singletons(profile)
+    assert "SingletonLock" in removed
+    assert not (profile / "SingletonLock").exists() or not (profile / "SingletonLock").is_symlink()
+
+
+def test_live_singleton_is_left_alone(tmp_path):
+    import os
+
+    from musebird.browser_lock import clear_stale_singletons
+
+    profile = tmp_path / "p2"
+    profile.mkdir()
+    os.symlink(f"host-{os.getpid()}", profile / "SingletonLock")
+    clear_stale_singletons(profile)
+    assert (profile / "SingletonLock").is_symlink()

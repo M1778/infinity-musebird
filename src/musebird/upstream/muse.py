@@ -23,14 +23,16 @@ NEW_THREAD_URL = f"{SITE}/thread/new"
 THREAD_URL = f"{SITE}/thread/{{thread_id}}"
 LOGIN_URL = SITE
 
-# Side chat: a separate conversation branch with its own context, so a job never
-# pollutes or continues the user's main conversation. Verified surface: the thread
-# header control; labels are localized because the account language is not ours.
-SIDE_CHAT_LABELS = ("Side chat", "Sidechat", "サイドチャット", "側邊聊天", "侧边聊天")
-SIDE_CHAT_BUTTON = (
-    'button[aria-label*="Side chat" i], button[data-testid*="side-chat" i], '
-    'button[aria-label*="Sidechat" i]'
+# Side chat. Verified against a live account on 2026-11-21: a thread opened at
+# /thread/new *is* a side chat (the header offers "Back to main chat"), so no extra
+# control has to be clicked. The invariant is checked, not assumed: a thread counts
+# as isolated only while that control is present.
+SIDE_CHAT_MARKERS = (
+    'button[aria-label*="Back to main chat" i]',
+    '[data-testid="hatch-side-chats-panel-shell"]',
+    '[data-testid*="side-chat"]',
 )
+SIDE_CHAT_LABELS = ("Back to main chat", "メインチャットに戻る", "返回主聊天")
 # Authenticated JSON probe: 200 with status == "assigned" means a live session.
 SESSION_API = f"{SITE}/api/session"
 VM_WAKE_API = f"{SITE}/api/hatch/vm/wake"
@@ -64,6 +66,9 @@ SELECTORS = {
     "hydration_ready": "hydrated",
     "attachment": '[data-testid^="hatch-chat-attachment-presentation-"]',
     "composer": "textarea",
+    # Verified 2026-11-21: Muse's composer has no send button. Enter submits, the
+    # composer clears, and the URL becomes /thread/<uuid>. Clicking a button with a
+    # "Send" label finds nothing, which is why the driver presses Enter first.
     "send_button": 'button[aria-label*="Send" i], button[data-testid*="send" i]',
     "stop_button": 'button[aria-label*="Stop" i]',
     "approval_card": '[data-testid="hatch-inline-approval-card"]',
@@ -72,8 +77,12 @@ SELECTORS = {
     "menu_item": "[role=menuitem]",
     "dialog": '[role="dialog"], [aria-modal="true"]',
     "file_input": 'input[type="file"]',
-    # Marks a thread that is a side chat rather than the main conversation.
-    "side_chat_marker": '[data-thread-kind="side"], [data-testid*="side-chat" i]',
+    # Any of these present means the thread is isolated from the main conversation.
+    "side_chat_marker": (
+        'button[aria-label*="Back to main chat" i], '
+        '[data-testid="hatch-side-chats-panel-shell"], '
+        '[data-testid*="side-chat"]'
+    ),
 }
 
 # Menu labels used to reach Settings -> Usage (quota). Localized on purpose: the

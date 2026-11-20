@@ -47,6 +47,7 @@ class BrowserDriver(MuseDriver):
         self._last_text = ""
         self._bubble_count: int | None = None
         self._stable = 0
+        self._profile_lock = None
 
     # -- lifecycle -------------------------------------------------------
     async def _launch(self) -> None:
@@ -58,16 +59,31 @@ class BrowserDriver(MuseDriver):
             from musebird.errors import DriverUnavailable
 
             raise DriverUnavailable("browser driver needs Playwright") from exc
+        from musebird.browser_lock import ProfileLock
         from musebird.browsers import launch_error, launch_kwargs
 
         self._pw = await async_playwright().start()
         profile = paths().browser_profile
         profile.mkdir(parents=True, exist_ok=True)
+        # Chromium refuses a shared user_data_dir, and two jobs must not race on the
+        # same cookie jar: take the profile lock before launching.
+        self._profile_lock = ProfileLock(profile, timeout=120)
         try:
+            self._profile_lock.__enter__()
+        except Exception:
+            await self._pw.stop()
+            self._pw = None
+            raise
+        try:
+            from musebird.browser_lock import clear_stale_singletons
+
+            clear_stale_singletons(profile)
             self._ctx = await self._pw.chromium.launch_persistent_context(
                 **launch_kwargs(profile, headless=True)
             )
         except Exception as exc:
+            self._profile_lock.__exit__()
+            self._profile_lock = None
             await self._pw.stop()
             self._pw = None
             raise launch_error(exc) from exc
@@ -81,21 +97,35 @@ class BrowserDriver(MuseDriver):
             return
         payload = []
         for name, value in cookies.items():
-            cookie: dict[str, Any] = {
-                "name": name,
-                "value": value,
-                "path": "/",
-                "secure": True,
-                "httpOnly": True,
-                "sameSite": "Lax",
-            }
+            if not value:
+                continue
             if name.startswith("__Host-"):
-                # Chromium rejects __Host- cookies that carry a Domain attribute.
-                cookie["url"] = muse.SITE + "/"
+                # __Host- cookies require Secure, Path=/, and *no* Domain. Playwright
+                # also rejects an explicit `path` next to `url`, which is why only
+                # `url` is set here — mixing the two raises before the cookie lands.
+                cookie: dict[str, Any] = {
+                    "name": name,
+                    "value": value,
+                    "url": muse.SITE + "/",
+                    "secure": True,
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                }
             else:
-                cookie["domain"] = "muse.ai"
+                cookie = {
+                    "name": name,
+                    "value": value,
+                    "domain": "muse.ai",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                }
             payload.append(cookie)
-        await self._ctx.add_cookies(payload)
+        # One bad cookie must not prevent the session cookies from loading.
+        for cookie in payload:
+            with contextlib.suppress(Exception):
+                await self._ctx.add_cookies([cookie])
 
     async def ensure_session(self) -> SessionState:
         await self._launch()
@@ -167,15 +197,17 @@ class BrowserDriver(MuseDriver):
         return ThreadRef(id=f"browser-{self.job_id}", url=self._page.url)
 
     async def _enter_side_chat(self) -> bool:
-        """Click the side-chat control and confirm the thread really is one."""
-        page = self._page
-        # Already a side chat (Muse may remember the last mode): nothing to do.
-        if await page.locator(muse.SELECTORS["side_chat_marker"]).count():
-            return True
-        with contextlib.suppress(Exception):
-            await page.locator(muse.SIDE_CHAT_BUTTON).first.click(timeout=5000)
+        """Confirm the thread is a side chat, waiting briefly for the shell to settle.
+
+        Verified 2026-11-21: `/thread/new` opens directly into a side chat, so this
+        usually just observes the marker. It never clicks "Side chat" blindly: if the
+        marker is absent the caller refuses to send, which is the safe direction.
+        """
+        for _ in range(12):
+            if await self._page.locator(muse.SELECTORS["side_chat_marker"]).count():
+                return True
             await asyncio.sleep(0.5)
-        return bool(await page.locator(muse.SELECTORS["side_chat_marker"]).count())
+        return False
 
     async def reopen(self, url: str) -> ThreadRef:
         await self._launch()
@@ -216,11 +248,24 @@ class BrowserDriver(MuseDriver):
         await composer.wait_for(state="visible", timeout=TIMEOUT)
         await composer.click()
         await page.keyboard.insert_text(text)
-        button = page.locator(muse.SELECTORS["send_button"]).first
-        with contextlib.suppress(Exception):
-            await button.click(timeout=5000)
-            return
+        # Verified 2026-11-21: Enter submits and clears the composer. Use it first;
+        # only look for a send button if the composer still holds the text.
         await page.keyboard.press("Enter")
+        with contextlib.suppress(Exception):
+            await asyncio.sleep(0.6)
+            if (await composer.input_value()).strip():
+                # Fallback for a future UI that adds an explicit control.
+                button = page.locator(muse.SELECTORS["send_button"]).first
+                if await button.count():
+                    await button.click(timeout=5000)
+        # Persist the real thread id: /thread/new is replaced by /thread/<uuid> on
+        # the first send, and resume needs the stable URL, not the alias.
+        with contextlib.suppress(Exception):
+            for _ in range(10):
+                if not page.url.rstrip("/").endswith("/thread/new"):
+                    thread.url = page.url
+                    return
+                await asyncio.sleep(0.3)
 
     async def _attach(self, files: list[str]) -> None:
         try:
@@ -435,6 +480,9 @@ class BrowserDriver(MuseDriver):
                 await self._pw.stop()
         finally:
             self._ctx = self._pw = self._page = None
+            if self._profile_lock is not None:
+                self._profile_lock.__exit__()
+                self._profile_lock = None
 
 
 async def page_is_side_chat(page) -> bool:

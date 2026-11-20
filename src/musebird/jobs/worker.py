@@ -70,9 +70,10 @@ class Worker:
             vm = await driver.wake_vm()
             self.registry.append_event(job.id, f"VM: {vm}")
             self._check_cancel()
-            quota_before = await driver.read_quota()
-            self._cache_quota(quota_before)
-            self.registry.update(job.id, state=st.RUNNING, quota_before=quota_before.to_dict())
+            # Quota is diagnostic. A UI change that breaks the scrape must not stop
+            # the job: record that it is unknown and carry on.
+            quota_before = await self._safe_quota(driver)
+            self.registry.update(job.id, state=st.RUNNING, quota_before=quota_before)
             thread = await self._resume_or_open(driver)
             if not self._sent:
                 prompt = build_prompt(job.prompt, job.id, mode=job.mode, agents=job.agents)

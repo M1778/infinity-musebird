@@ -208,3 +208,21 @@ async def test_hostile_bundle_fails_without_landing(tmp_path, project):
     assert final.error_code == "guard_violation"
     assert not (project / "escape.txt").exists()
     assert not (project.parent / "escape.txt").exists()
+
+
+async def test_quota_failure_does_not_stop_a_job(tmp_path, project):
+    """A broken quota scrape is diagnostic; the job must still run and land."""
+    from musebird.errors import UpstreamError
+
+    class NoQuotaDriver(MockDriver):
+        async def read_quota(self):
+            raise UpstreamError("could not read quota from the Muse UI: TimeoutError")
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    final = await Worker(
+        job.id, registry=reg, driver=NoQuotaDriver(job.id), poll=0.01
+    ).run()
+    assert final.state == st.DONE
+    assert final.quota_before is None
+    assert final.quota_after is None

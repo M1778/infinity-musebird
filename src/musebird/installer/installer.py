@@ -316,8 +316,16 @@ def _selftest_checks() -> list[Check]:
     try:
         return asyncio.run(probe())
     except Exception as exc:
-        return [Check("live selftest", False, type(exc).__name__,
-                      "Run `MUSEBIRD_LIVE=1 pytest tests/test_live.py -s` for detail.")]
+        # Show the message, not just the class: "Error" told the user nothing.
+        detail = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+        return [
+            Check(
+                "live selftest",
+                False,
+                f"{type(exc).__name__}: {detail}"[:300],
+                "Run `MUSEBIRD_LIVE=1 .venv/bin/python -m pytest tests/test_live.py -s -v`.",
+            )
+        ]
 
 
 def _module_importable() -> bool:
