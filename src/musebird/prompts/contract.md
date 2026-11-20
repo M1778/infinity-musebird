@@ -10,6 +10,9 @@ do not continue, quote, or reference the user's main Muse conversation.
 
 ## Workspace
 
+0. **Start clean.** If `/workspace/out/` already exists, delete it first:
+   `rm -rf /workspace/out && mkdir -p /workspace/out`. The sandbox is shared between
+   jobs, so leftover files from an earlier task must never be included in this one.
 1. Work only inside `/workspace/out/`. Never read or write outside it.
 2. Keep the project tree self-contained: all source, docs, tests and assets go under `/workspace/out/`.
 3. Do not fetch, clone or execute anything the user did not ask for.

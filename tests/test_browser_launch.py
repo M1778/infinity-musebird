@@ -251,3 +251,95 @@ def test_attachment_filenames_are_safe_and_keep_extensions(raw, expected):
     from musebird.drivers.browser.driver import _safe_name
 
     assert _safe_name(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_usage_panel_waits_for_the_content_stage(monkeypatch):
+    """The Settings panel paints nav first, numbers later; don't return too early.
+
+    Live evidence 2026-11-21: the first innerText was 247 chars ending at "Password,
+    security, personal det" with no percentage, then the full panel appeared.
+    """
+    from musebird.drivers.browser.driver import BrowserDriver
+
+    partial = "Settings\nGeneral\nUsage\nPassword, security, personal det"
+    full = (
+        "Settings\nGeneral\nUsage\nFree plan\nWeekly limit resets on Nov 27\n"
+        "0% used\nAdditional tokens\nNever expires\n0% used (1B tokens left)"
+    )
+    reads = {"count": 0}
+
+    class Panel:
+        async def inner_text(self):
+            reads["count"] += 1
+            # First few reads see the half-rendered panel.
+            return partial if reads["count"] < 4 else full
+
+    class Panels:
+        async def count(self):
+            return 1
+
+        def nth(self, index):
+            return Panel()
+
+        async def inner_text(self):  # the code also calls .first-like indexing
+            return await Panel().inner_text()
+
+    class Locator:
+        first = None
+
+        def __init__(self):
+            self.first = self
+
+        async def click(self, timeout=None):
+            return None
+
+        async def count(self):
+            return 1
+
+    class Keyboard:
+        async def press(self, key):
+            return None
+
+    class Page:
+        keyboard = Keyboard()
+
+        def locator(self, sel):
+            return Panels() if sel.startswith('[role="dialog"]') else Locator()
+
+        def get_by_role(self, role, name=None, exact=False):
+            return Locator()
+
+    driver = BrowserDriver("t")
+    driver._page = Page()
+    driver._ctx = object()
+
+    async def fake_launch():
+        return None
+
+    monkeypatch.setattr(driver, "_launch", fake_launch)
+
+    import musebird.drivers.browser.driver as drv
+
+    async def fake_sleep(_s):
+        return None
+
+    monkeypatch.setattr(drv.asyncio, "sleep", fake_sleep)
+
+    text = await driver._open_usage()
+    assert "%" in text, f"returned the half-rendered panel: {text!r}"
+    assert "Free plan" in text
+
+
+def test_usage_parses_zero_percent_correctly():
+    """0% used is a real value, not 'missing'."""
+    from musebird.session.quota import parse_usage_text
+
+    text = (
+        "Usage\nFree plan\nWeekly limit resets on Nov 27\n0% used\n"
+        "Additional tokens\nNever expires\n0% used (1B tokens left)"
+    )
+    parsed = parse_usage_text(text)
+    assert parsed["found"] is True
+    assert parsed["weekly_used_pct"] == 0.0
+    assert parsed["resets_at"] == "Nov 27"

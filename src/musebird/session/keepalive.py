@@ -44,8 +44,11 @@ class QuotaCache:
         return data
 
     def fresh(self) -> dict | None:
+        """The cache, only if it is recent *and* actually carries a percentage."""
         data = self.get()
         if not data:
+            return None
+        if data.get("used") is None:
             return None
         if time.time() - float(data.get("_cached_at", 0)) > self.ttl:
             return None

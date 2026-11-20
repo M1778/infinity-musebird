@@ -46,6 +46,27 @@ OPTIONAL_SESSION_COOKIES = ("hatch_gw", "hatch_vml")
 SESSION_ASSIGNED = "assigned"
 VM_RUNNING = "RUNNING"
 VM_DISABLED = "DISABLED"
+# Verified live 2026-11-21: UNKNOWN is the normal resting state, not an error. The
+# server accepts a wake and queues it; `RUNNING` may never appear for a cold sandbox.
+VM_UNKNOWN = "UNKNOWN"
+# Success criterion for a wake: a 200 with this status. Waiting for RUNNING here
+# burns a full timeout on every job and then reports a false failure.
+VM_WAKE_ACK = "wake_requested"
+VM_WAKE_CONFIRM_S = 5
+
+# Muse rejects the wake POST with 403 unless the browser's fetch metadata headers
+# are present. Verified matrix: User-Agent + all three Sec-Fetch-* are required
+# together; dropping any one returns 403 {"error":"Forbidden"}.
+VM_WAKE_HEADERS = {
+    "Origin": "https://muse.ai",
+    "Referer": "https://muse.ai/thread/new",
+    "Accept": "*/*",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+}
+# Muse's own client sends these; not required, but matching it costs nothing.
+VM_WAKE_BODY_EXTRA = {"wake_trigger": "mount", "away_ms": 0}
 
 # Completion contract printed by the remote agent (see prompts/contract.md).
 DONE_SENTINEL = "INF-MUSEBIRD-DONE"

@@ -75,11 +75,11 @@ def test_quota_cache_ttl(sandbox_home, monkeypatch):
 
     cache = QuotaCache(sandbox_home, ttl=60)
     assert cache.get() is None
-    cache.put({"weekly_used_pct": 5})
-    assert cache.fresh()["weekly_used_pct"] == 5
+    cache.put({"used": 5.0, "limit": 100.0})
+    assert cache.fresh()["used"] == 5.0
     monkeypatch.setattr("musebird.session.keepalive.time.time", lambda: 10**10)
     assert cache.fresh() is None
-    assert cache.get()["weekly_used_pct"] == 5
+    assert cache.get()["used"] == 5.0
 
 
 def test_session_summary(sandbox_home):

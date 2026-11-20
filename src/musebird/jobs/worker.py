@@ -138,6 +138,9 @@ class Worker:
         """Poll until the job finishes. Returns True when results should be landed."""
         cursor = self.registry.get(self.job_id).cursor
         last_activity = time.time()
+        # A silent worker is indistinguishable from a stuck one. Emit a heartbeat
+        # (rate-limited) so `jobs show --events` always explains what is happening.
+        last_beat = 0.0
         while True:
             self._check_cancel()
             self._flush_user_messages(driver, thread)
@@ -159,6 +162,14 @@ class Worker:
                 if event.kind == "error":
                     raise UpstreamError(event.text or "Muse reported an error")
                 self.registry.append_event(self.job_id, event.text, kind=event.kind)
+            now = time.time()
+            if not events and now - last_beat >= 30:
+                last_beat = now
+                self.registry.append_event(
+                    self.job_id,
+                    f"waiting for Muse ({int(now - last_activity)}s since last activity)",
+                    kind="info",
+                )
             if time.time() - last_activity > IDLE_TIMEOUT:
                 # Sentinel missing: fall back to scanning for a manifest in the sandbox.
                 files = await driver.list_sandbox_files(thread)
@@ -325,7 +336,11 @@ class Worker:
                 self.registry.append_event(job.id, f"git landing skipped: {exc.message}", kind="error")
         self.registry.update(job.id, state=st.DONE, landing_dir=str(source), branch=branch)
         self.registry.append_event(
-            job.id, f"verified {len(result.verified)} files; landing at {source}", kind="done"
+            job.id,
+            f"verified {len(result.verified)} file(s): "
+            + ", ".join(result.verified[:10])
+            + (f" (+{len(result.verified) - 10} more)" if len(result.verified) > 10 else ""),
+            kind="done",
         )
         self.audit.write(
             "job_done", job=job.id, files=[e.path for e in entries], branch=branch,
@@ -342,11 +357,18 @@ class Worker:
             return None
 
     def _cache_quota(self, quota) -> None:
-        """Persist the snapshot: `muse_status` and fan-out sizing both read it."""
+        """Persist the snapshot: `muse_status` and fan-out sizing both read it.
+
+        A snapshot without a real percentage is not cached: showing an old "0% used"
+        from a failed scrape is worse than showing nothing.
+        """
         try:
             from musebird.session.keepalive import QuotaCache
 
-            QuotaCache(self.paths).put(quota.to_dict())
+            payload = quota.to_dict()
+            if payload.get("used") is None:
+                return
+            QuotaCache(self.paths).put(payload)
         except Exception:
             pass
 

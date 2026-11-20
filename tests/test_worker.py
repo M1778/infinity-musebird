@@ -28,7 +28,7 @@ async def test_success_lands_and_verifies(tmp_path, project):
     assert landed and landed[0].read_text() == "hello from the sandbox\n"
     events, _ = reg.events_since(job.id, 0)
     texts = [e["text"] for e in events]
-    assert any("verified 2 files" in t for t in texts), texts
+    assert any("verified 2 file(s)" in t for t in texts), texts
 
 
 async def test_manifest_mismatch_fails(tmp_path, project):
@@ -304,3 +304,34 @@ async def test_extracted_manifest_wins_over_a_loose_copy(tmp_path, git_project):
     ).run()
     assert final.state == st.DONE, final.error
     assert (Path(final.landing_dir) / "hello.txt").read_bytes() == payload
+
+
+async def test_a_stalled_job_emits_heartbeats(tmp_path, project):
+    """Silence must not look identical to a stuck job."""
+    class QuietDriver(MockDriver):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.calls = 0
+
+        async def stream_events(self, thread, cursor=0):
+            self.calls += 1
+            if self.calls > 3:
+                return [], cursor
+            return await super().stream_events(thread, cursor)
+
+    import musebird.jobs.worker as worker_module
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    # Compress the heartbeat window so the test stays fast.
+    original = worker_module.IDLE_TIMEOUT
+    worker_module.IDLE_TIMEOUT = 0.4
+    try:
+        final = await Worker(
+            job.id, registry=reg, driver=QuietDriver(job.id), poll=0.05
+        ).run()
+    finally:
+        worker_module.IDLE_TIMEOUT = original
+    _events, _ = reg.events_since(job.id, 0)
+    assert final.state == st.FAILED  # went quiet without a sentinel
+    assert "went quiet" in (final.error or "")

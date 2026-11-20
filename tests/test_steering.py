@@ -144,3 +144,28 @@ def test_cancelling_a_paused_job_terminates_it(sandbox_home, project):
     final = reg.get(job.id)
     assert final.state == st.CANCELLED
     assert not reg.cancel_requested(job.id)
+
+
+async def test_a_failed_quota_scrape_is_not_cached(tmp_path, project, sandbox_home):
+    """Stale/empty quota must never masquerade as a fresh reading."""
+    from musebird.errors import UpstreamError
+    from musebird.session.keepalive import QuotaCache
+
+    class NoQuota(MockDriver):
+        async def read_quota(self):
+            raise UpstreamError("scrape failed")
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    await Worker(job.id, registry=reg, driver=NoQuota(job.id), poll=0.01).run()
+    assert QuotaCache(sandbox_home).get() is None
+    assert QuotaCache(sandbox_home).fresh() is None
+
+
+def test_fresh_ignores_a_cache_without_a_percentage(sandbox_home):
+    from musebird.session.keepalive import QuotaCache
+
+    cache = QuotaCache(sandbox_home)
+    cache.put({"used": None, "limit": 100.0})
+    assert cache.get() is not None
+    assert cache.fresh() is None

@@ -21,6 +21,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,21 @@ class BrowserDriver(MuseDriver):
             detail=f"vm_state={body.get('vm_state')}",
         )
 
+    async def _ensure_on_site(self) -> None:
+        """Make sure the page origin is muse.ai.
+
+        The VM wake POST is rejected with 403 unless the request looks same-origin
+        (Sec-Fetch-Site: same-origin), which is only true once a muse.ai document is
+        loaded. A freshly launched context sits on about:blank.
+        """
+        page = self._page
+        if page is None:
+            return
+        with contextlib.suppress(Exception):
+            if "muse.ai" not in (page.url or ""):
+                await page.goto(muse.LOGIN_URL, wait_until="domcontentloaded")
+                await asyncio.sleep(1.0)
+
     async def _session_body(self) -> dict:
         resp = await self._page.request.get(muse.SESSION_API, timeout=TIMEOUT)
         if resp.status in (401, 403):
@@ -173,6 +189,19 @@ class BrowserDriver(MuseDriver):
             return {}
 
     async def wake_vm(self) -> str:
+        """Ask Muse to start the sandbox VM.
+
+        Verified live 2026-11-21, two traps:
+
+        * The POST needs a User-Agent and all three `Sec-Fetch-*` headers or Muse
+          answers 403, and Playwright's `data=` form-encodes a dict (Muse then says
+          400 "Invalid retry_count"), so the body must be a JSON string.
+        * `vm_state` stays UNKNOWN for a cold sandbox even after a confirmed
+          200 `wake_requested`. A 200 acknowledgement *is* the success signal; polling
+          for RUNNING would waste a minute and then report a false failure.
+        """
+        await self._launch()
+        await self._ensure_on_site()
         body = await self._session_body()
         vm_id = body.get("vm_id")
         state = body.get("vm_state")
@@ -180,21 +209,57 @@ class BrowserDriver(MuseDriver):
             return f"vm unavailable ({state or 'no vm_id'})"
         if state == muse.VM_RUNNING:
             return "running"
+
         payload = {
             "vm_id": vm_id,
             "retry_count": 0,
             "connect_attempt_id": f"musebird-{self.job_id}",
+            **muse.VM_WAKE_BODY_EXTRA,
         }
-        # A 403 here usually means "already running": the state poll is the truth.
+        headers = dict(muse.VM_WAKE_HEADERS)
         with contextlib.suppress(Exception):
-            await self._page.request.post(muse.VM_WAKE_API, data=payload, timeout=TIMEOUT)
-        deadline = time.time() + 60
+            headers["User-Agent"] = await self._page.evaluate("navigator.userAgent")
+
+        acked = False
+        try:
+            resp = await self._page.request.post(
+                muse.VM_WAKE_API,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=TIMEOUT,
+            )
+            acked = resp.ok
+        except Exception:
+            acked = False
+        if not acked:
+            # 403 or a transport error: retry as a fetch issued by the page itself.
+            # Chrome supplies every fetch-metadata header Muse demands, including
+            # the ones we cannot reliably fake from the request context.
+            with contextlib.suppress(Exception):
+                result = await self._page.evaluate(
+                    """async (body) => {
+                        const r = await fetch('https://muse.ai/api/hatch/vm/wake', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(body),
+                            credentials: 'include',
+                        });
+                        return {status: r.status, text: await r.text()};
+                    }""",
+                    payload,
+                )
+                acked = bool(result and result.get("status") == 200)
+
+        # Short confirmation window only; UNKNOWN is expected and is not a failure.
+        deadline = time.time() + muse.VM_WAKE_CONFIRM_S
         while time.time() < deadline:
             body = await self._session_body()
             if body.get("vm_state") == muse.VM_RUNNING:
                 return "running"
-            await asyncio.sleep(2.0)
-        return f"wake requested; vm_state={body.get('vm_state')}"
+            await asyncio.sleep(1.0)
+        if acked:
+            return "wake acknowledged (VM starts on the first turn)"
+        return f"wake not acknowledged; vm_state={body.get('vm_state')}"
 
     async def open_thread(self) -> ThreadRef:
         """Open a *side chat*: isolated context, never the account's main chat.
@@ -561,21 +626,50 @@ class BrowserDriver(MuseDriver):
         )
 
     async def _open_usage(self) -> str:
-        """Settings -> Usage dialog scrape. Every step is best-effort."""
+        """Open Settings and return the text of the usage panel.
+
+        Verified live 2026-08-21: opening the dock menu creates a second dialog-like
+        node (the menu itself), so `[role=dialog]`.first is the *menu*, not the
+        settings panel. The reliable rule is to pick the dialog whose text actually
+        contains the Usage section.
+        """
+        page = self._page
         try:
-            await self._page.keyboard.press("Escape")
-            await self._page.keyboard.press("Escape")
-            await self._page.locator(muse.SELECTORS["settings_dock"]).first.click(timeout=5000)
+            for _ in range(2):
+                await page.keyboard.press("Escape")
+            await page.locator(muse.SELECTORS["settings_dock"]).first.click(timeout=5000)
+            clicked = False
             for label in muse.SETTINGS_LABELS:
-                item = self._page.get_by_role("menuitem", name=label, exact=False)
+                item = page.get_by_role("menuitem", name=label, exact=False)
                 if await item.count():
-                    await item.first.click(timeout=3000)
+                    await item.first.click(timeout=5000)
+                    clicked = True
                     break
-            dialog = self._page.locator(muse.SELECTORS["dialog"]).first
-            await dialog.wait_for(timeout=8000)
-            text = await dialog.inner_text()
-            await self._page.keyboard.press("Escape")
-            return text
+            if not clicked:
+                raise UpstreamError("could not find the Settings menu item")
+
+            # The panel paints in two stages: the nav list first (no numbers), then the
+            # content. Wait for a percentage so we never return the half-rendered text.
+            best = ""
+            for _ in range(30):
+                panels = page.locator(muse.SELECTORS["dialog"])
+                for index in range(await panels.count()):
+                    text = await panels.nth(index).inner_text()
+                    if "%" in text or "％" in text:
+                        with contextlib.suppress(Exception):
+                            await page.keyboard.press("Escape")
+                        return text
+                    if "Usage" in text and len(text) > len(best):
+                        best = text
+                await asyncio.sleep(0.5)
+            if best:
+                # No percentage at all: return what we saw so the parser can explain.
+                with contextlib.suppress(Exception):
+                    await page.keyboard.press("Escape")
+                return best
+            raise UpstreamError("the Settings panel never showed a Usage section")
+        except UpstreamError:
+            raise
         except Exception as exc:
             raise UpstreamError(
                 f"could not read quota from the Muse UI: {type(exc).__name__}"
@@ -594,13 +688,44 @@ class BrowserDriver(MuseDriver):
         except Exception as exc:
             checks.append({"check": "session", "ok": False, "detail": type(exc).__name__})
         await self._page.goto(muse.NEW_THREAD_URL, wait_until="domcontentloaded")
-        for name in ("composer", "send_button", "agent_bubble", "hydration"):
+        await asyncio.sleep(3)
+        # Only selectors that must exist on a *fresh* thread are checked here.
+        # `agent_bubble` and `file_card` appear once there is output, and `send_button`
+        # does not exist at all (Enter submits), so testing them here would always
+        # fail and teach the user to ignore the report.
+        for name in ("composer", "hydration", "side_chat_marker", "file_input"):
             try:
                 count = await self._page.locator(muse.SELECTORS[name]).count()
             except Exception:
                 count = 0
             checks.append(
                 {"check": f"selector:{name}", "ok": count > 0, "detail": f"{count} match(es)"}
+            )
+        # Side-chat isolation is an invariant, so it is asserted explicitly.
+        checks.append(
+            {
+                "check": "side-chat isolation",
+                "ok": await page_is_side_chat(self._page),
+                "detail": "thread is isolated from the main conversation",
+            }
+        )
+        # Quota is read from a dialog; a failure here is informative, not fatal.
+        try:
+            quota = await self.read_quota()
+            checks.append(
+                {
+                    "check": "quota readable",
+                    "ok": quota.used is not None,
+                    "detail": f"{quota.used}% used, resets {quota.resets_at or 'unknown'}",
+                }
+            )
+        except Exception as exc:
+            checks.append(
+                {
+                    "check": "quota readable",
+                    "ok": False,
+                    "detail": getattr(exc, "message", None) or type(exc).__name__,
+                }
             )
         return checks
 

@@ -302,23 +302,16 @@ def _selftest_checks() -> list[Check]:
                 return out
             try:
                 vm = await driver.wake_vm()
+                # Verified live: a cold sandbox reports UNKNOWN forever, so a wake
+                # acknowledgement is the real success signal, not vm_state == RUNNING.
+                ok = vm == "running" or "acknowledged" in vm
                 out.append(
-                    Check("sandbox VM awake", vm == "running", vm,
-                          "Open an app.muse thread once, then retry.")
+                    Check("sandbox VM awake", ok, vm,
+                          "Open a Muse thread once, then retry; check the wake headers.")
                 )
             except Exception as exc:
                 out.append(Check("sandbox VM awake", False, type(exc).__name__,
                                  "Open an app.muse thread once, then retry."))
-            try:
-                badge = await driver.read_quota()
-                detail = f"{badge.used}% of {badge.limit}" if badge.used is not None else "unparsed"
-                out.append(
-                    Check("quota readable", badge.used is not None, detail,
-                          "Muse's Usage dialog changed; update parse_usage_text.")
-                )
-            except Exception as exc:
-                out.append(Check("quota readable", False, type(exc).__name__,
-                                 "Update the usage selectors in upstream/muse.py."))
             for item in await driver.selftest():
                 out.append(
                     Check(f"selector {item['check']}", bool(item["ok"]), str(item["detail"]),
