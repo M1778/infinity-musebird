@@ -30,7 +30,6 @@ jobs:
         run: uv run ruff check .
       - name: Type check
         run: uv run pyright
-        continue-on-error: true
       - name: Build wheel
         run: uv build --wheel .
       - name: Tests
@@ -56,22 +55,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Install
-        run: uv pip install --system -e .
+        run: |
+          uv venv
+          uv pip install -e .
       - name: Install into fixture homes for every harness
         run: |
+          set -euo pipefail
+          MB="$PWD/.venv/bin/musebird"
           export HOME=$(mktemp -d)
           export XDG_CONFIG_HOME="$HOME/.config"
+          export MUSEBIRD_HOME="$HOME/.infinity-musebird"
           mkdir -p "$HOME/.claude" "$HOME/.codex" "$XDG_CONFIG_HOME/opencode"
           echo '{"theme":"dark"}' > "$HOME/.claude.json"
           printf '[model]\nname = "x"\n' > "$HOME/.codex/config.toml"
           echo '{"theme":"dark"}' > "$XDG_CONFIG_HOME/opencode/opencode.json"
-          musebird install --yes --skip-login
-          musebird install --yes --skip-login
+          "$MB" install --yes --skip-login
+          "$MB" install --yes --skip-login
           echo "--- claude ---"; cat "$HOME/.claude.json"
           echo "--- codex ---"; cat "$HOME/.codex/config.toml"
           echo "--- opencode ---"; cat "$XDG_CONFIG_HOME/opencode/opencode.json"
-          test $(grep -c musebird "$HOME/.claude.json") -eq 1
+          test "$(grep -c musebird "$HOME/.claude.json")" -eq 2
           test -f "$HOME/.claude/skills/inf-muse/SKILL.md"
           test -f "$HOME/.agents/skills/inf-muse/SKILL.md"
-          musebird uninstall
-          ! grep -q musebird "$HOME/.claude.json"
+          test -f "$XDG_CONFIG_HOME/opencode/skills/inf-muse/SKILL.md"
+          # dry run must not write
+          before=$(cat "$HOME/.claude.json")
+          "$MB" uninstall --dry-run
+          test "$before" = "$(cat "$HOME/.claude.json")"
+          "$MB" uninstall
+          ! grep -q '"musebird"' "$HOME/.claude.json"
+          echo "installer smoke: ok"
