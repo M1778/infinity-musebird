@@ -26,6 +26,15 @@ do not continue, quote, or reference the user's main Muse conversation.
 
 When the task is complete:
 
+0. **Attach the deliverables to your final reply.** MuseBird can only retrieve files
+   that you attach to the conversation, so this step is mandatory:
+
+   - Pack the results: `cd /workspace/out && tar -czf /workspace/out.tar.gz .`
+   - **Attach `out.tar.gz` and `MANIFEST.json` to your last message** using the
+     attach-file control in the composer.
+   - If attaching fails, paste the manifest contents in a fenced code block and say
+     clearly that the bundle could not be attached.
+
 1. Write `/workspace/out/MANIFEST.json`:
 
 ```json

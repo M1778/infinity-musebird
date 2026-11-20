@@ -375,19 +375,44 @@ class BrowserDriver(MuseDriver):
             )
         return out
 
+    async def _scroll_to_bottom(self) -> None:
+        """Older attachment cards are virtualised until scrolled into view."""
+        with contextlib.suppress(Exception):
+            await self._page.evaluate(
+                """() => {
+                    for (const e of document.querySelectorAll('*')) {
+                        const s = getComputedStyle(e);
+                        if ((s.overflowY === 'auto' || s.overflowY === 'scroll')
+                            && e.scrollHeight > e.clientHeight + 40) {
+                            e.scrollTop = e.scrollHeight;
+                        }
+                    }
+                }"""
+            )
+            await asyncio.sleep(0.5)
+
     async def download(self, thread: ThreadRef, dest_dir: str) -> list[str]:
         """Download attachments rendered in the conversation via in-page fetch."""
         dest = Path(dest_dir)
         dest.mkdir(parents=True, exist_ok=True)
+        await self._scroll_to_bottom()
         try:
             blobs = await self._page.eval_on_selector_all(
                 muse.SELECTORS["attachment"],
                 """els => els.map(e => {
+                    // Any element carrying a downloadable URL wins: an <a download>,
+                    // a blob: link, or media. Files (tar/zip/manifest) usually attach
+                    // as a plain link, not an <img>, so check links before media.
                     const a = e.querySelector('a[download]');
-                    if (a) return {name: a.download, url: a.href};
-                    const v = e.querySelector('a[href^="blob:"], video, img');
-                    return v ? {name: (v.download || e.innerText || 'attachment').trim(),
-                                url: v.src || v.href} : null;
+                    if (a && a.href) return {name: a.download || a.innerText, url: a.href};
+                    const link = e.querySelector('a[href^="blob:"], a[href^="http"]');
+                    if (link) return {name: link.download || link.innerText,
+                                      url: link.href};
+                    const m = e.querySelector('video, img');
+                    if (m && (m.currentSrc || m.src)) {
+                        return {name: m.download || e.innerText, url: m.currentSrc || m.src};
+                    }
+                    return null;
                 }).filter(Boolean)""",
             )
         except Exception:
@@ -493,8 +518,34 @@ async def page_is_side_chat(page) -> bool:
         return False
 
 
+_KNOWN_EXT = (
+    ".tar.gz", ".tar.zst", ".tar", ".tgz", ".zip", ".json", ".md", ".txt", ".py",
+    ".js", ".ts", ".html", ".css", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf",
+)
+
+
 def _safe_name(name: str) -> str:
-    cleaned = "".join(c for c in name if c.isalnum() or c in "._- ")
+    """A filesystem-safe filename that keeps a recognisable extension.
+
+    Attachment cards often render a long description rather than a filename, so
+    look for a known extension anywhere in the text before falling back.
+    """
+    text = (name or "").strip()
+    lowered = text.lower()
+    for ext in _KNOWN_EXT:
+        index = lowered.rfind(ext)
+        if index != -1:
+            # Walk left to the start of the filename token: stop at a path separator
+            # or whitespace so a sentence like "Download out.tar.gz now" yields
+            # "out.tar.gz", not the whole sentence.
+            start = index
+            while start > 0 and text[start - 1] not in " \t\n/\\\"'()[]<>|,:;":
+                start -= 1
+            candidate = text[start : index + len(ext)]
+            cleaned = "".join(c for c in candidate if c.isalnum() or c in "._- ")
+            if cleaned:
+                return cleaned[:120]
+    cleaned = "".join(c for c in text if c.isalnum() or c in "._- ")
     cleaned = cleaned.replace("/", "_").replace("\\", "_").strip()
     return cleaned[:120] or "attachment"
 

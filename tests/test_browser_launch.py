@@ -234,3 +234,20 @@ async def test_send_captures_the_real_thread_url(monkeypatch):
 
 async def _async_list(value):
     return value
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("out.tar.gz", "out.tar.gz"),
+        ("Download the bundle out.tar.gz now", "out.tar.gz"),
+        ("MANIFEST.json", "MANIFEST.json"),
+        ("src/app.py", "app.py"),
+        ("", "attachment"),
+        ("!!!", "attachment"),
+    ],
+)
+def test_attachment_filenames_are_safe_and_keep_extensions(raw, expected):
+    from musebird.drivers.browser.driver import _safe_name
+
+    assert _safe_name(raw) == expected
