@@ -1,0 +1,103 @@
+# Harness notes — verified third-party behaviour
+
+Everything here was checked against the sources listed, on the dates shown. The
+installer depends on these facts, so when a harness changes, update this file and
+`src/musebird/installer/` together.
+
+## Muse (the upstream service)
+
+Verified **2026-11-20** against the live site and
+[`www222fff/muse2api`](https://github.com/www222fff/muse2api) at commit `3a20b5e`
+(2026-11-01).
+
+| Fact | Value |
+|---|---|
+| Product | Meta's Muse, `https://muse.ai` (launched 2026-09-08). "hatch" is the internal client codename. |
+| Landing / login | `https://muse.ai` — Meta OIDC, SSO and 2FA work in a real browser |
+| New thread | `https://muse.ai/thread/new` |
+| Thread | `https://muse.ai/thread/<id>` |
+| Session probe | `GET /api/session` → 200 with `status == "assigned"`; 401 when signed out |
+| VM wake | `POST /api/hatch/vm/wake` with `{vm_id, retry_count, connect_attempt_id}`; confirm by polling `vm_state == "RUNNING"`. A 403 often means "already running" — never trust the wake response alone. |
+| Quota | No API. UI scrape: Settings → Usage dialog. Weekly percent + reset date + extra token balance. Cached 30 min. |
+| Cookies | `hatch_sess` + `hatch_native_auth_device` required. `hatch_gw`, `hatch_vml` optional since 2026-10 (Muse stopped setting them on every session). `hatch_sess` may be `__Host-` prefixed, in which case it must be set with `url=`, not `domain=`. |
+| Chat send | Textarea + native value setter so React sees the change, then the send button; Enter as fallback |
+| Completion | Stop button gone + reply text stable for 4 polls. **We use the prompt-contract sentinel as the primary signal and the DOM only as a hint.** |
+| Downloads | Attachments are `blob:` URLs valid only inside the document, so download must be an in-page `fetch()` |
+| Approvals | Muse shows inline approval cards (e.g. publishing a public link). muse2api denies them by default; we do the same, and log it. |
+| Official API | **None for the Muse agent.** `dev.meta.ai` is the Meta Model API (models, not the agent) and `Muse Code` is a separate terminal product. |
+| Sandbox git push | **Unverified.** Sentinel gates egress, no confirmation that `git push` works. Do not depend on it: bundle download is the primary sync path. |
+| Subagents | Consumer Muse has side chats and parallel tasks but no documented subagent syntax. Fan-out is therefore a **prompt contract** ("decompose, run N agents, cross-review, merge"), not an API feature. |
+
+Fragile selectors (ranked, from muse2api's `dom.py`, which its authors describe as
+the single point of breakage): `div[class*="hatch-agent-bubble-bg"]` (CSS-module
+hash), the hydration attribute, attachment testid prefix, settings dock + menu label
+match, and the Stop button. All of them live in `upstream/muse.py` and `selftest`
+reports which one is missing.
+
+## Claude Code
+
+Verified **2026-11-20** against `claude 2.1.302` and
+<https://code.claude.com/docs/en/mcp>, <https://code.claude.com/docs/en/skills>.
+
+| Fact | Value |
+|---|---|
+| Detection | `claude` on PATH, `~/.claude/`, `~/.claude.json` |
+| User-scope MCP file | `~/.claude.json`, **top-level** `mcpServers` |
+| CLI | `claude mcp add --transport stdio --scope user musebird -- musebird mcp` |
+| `settings.json` | Does **not** store MCP servers (verified: `mcp get` cannot see an entry there) |
+| Skills | `~/.claude/skills/<name>/SKILL.md` |
+| Frontmatter | all optional; `description` drives auto-invocation; `allowed-tools` supported |
+| Invocation | `/inf-muse` |
+| Duplicate `mcp add` | exits 1, refuses. Remove first to change a definition. |
+| Windows | `%USERPROFILE%\.claude`, `%USERPROFILE%\.claude.json`; `CLAUDE_CONFIG_DIR` relocates both |
+
+We edit `~/.claude.json` directly (with a backup) rather than shelling out, so the
+installer works when `claude` is not on PATH. The entry is `{"type":"stdio",
+"command":"musebird","args":["mcp"],"env":{}}`.
+
+## Codex CLI
+
+Verified **2026-11-20** against `codex-cli 0.166.0` and
+<https://developers.openai.com/codex/extend/mcp>,
+<https://developers.openai.com/codex/build-skills>.
+
+| Fact | Value |
+|---|---|
+| Detection | `codex` on PATH, `$CODEX_HOME` or `~/.codex` |
+| Global MCP file | `~/.codex/config.toml`, table `[mcp_servers.musebird]` |
+| CLI | `codex mcp add musebird -- musebird mcp` (global only; no scope flag) |
+| Skills | **`~/.agents/skills/<name>/SKILL.md`** — not `~/.codex/skills` |
+| Frontmatter | `name` and `description` **required** (stricter than Claude Code) |
+| Invocation | `$inf-muse` or `/skills` |
+| Legacy prompts | `~/.codex/prompts/*.md` → `/prompts:name`, deprecated — we do not install there |
+| Duplicate `mcp add` | silently replaces, exit 0 — so check first |
+| Output of writes | TOML serializer drops inline comments; we back up before editing |
+
+## OpenCode
+
+Verified **2026-11-20** against <https://opencode.ai/docs/mcp-servers> and
+<https://opencode.ai/docs/skills> (V2 docs).
+
+| Fact | Value |
+|---|---|
+| Detection | `opencode` on PATH, `~/.config/opencode/` |
+| Global config | `~/.config/opencode/opencode.json` or `.jsonc` |
+| MCP shape (V2) | `mcp.servers.<name> = {"type": "local", "command": ["musebird", "mcp"]}` |
+| CLI | `opencode mcp add musebird --global -- musebird mcp` |
+| Skills | `~/.config/opencode/skills/<id>/SKILL.md`; also discovers `~/.claude/skills` and `~/.agents/skills` |
+| Frontmatter | optional; `description` needed for model discovery; `disable-model-invocation: true` to hide |
+| Invocation | `/inf-muse` |
+| Config reload | live, no restart needed |
+
+Because OpenCode also reads `~/.claude/skills` and `~/.agents/skills`, a machine
+with all three harnesses ends up with the skills installed in three places. That is
+intentional: each harness gets its native location, and `uninstall` removes only
+paths recorded in `install-state.json`.
+
+## Toolchain
+
+- Package: Python 3.10+, `uv` for install and Python provisioning.
+- MCP SDK: `mcp>=2.3,<3` — v2 renamed `FastMCP` to `MCPServer`
+  (`from mcp.server.mcpserver import MCPServer`). v1 examples do not apply.
+- Browser: Playwright, preferring a system Chrome/Edge channel over a downloaded
+  Chromium.

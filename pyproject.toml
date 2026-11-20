@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infinity-musebird"
+version = "0.1.0"
+description = "Use Muse as a subagent inside Claude Code, Codex and OpenCode via MCP. Unofficial."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "infinity-musebird contributors" }]
+keywords = ["mcp", "muse", "claude-code", "codex", "opencode", "subagents", "ai-agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Code Generators",
+]
+dependencies = [
+  "mcp>=2.3,<3",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.48"]
+keyring = ["keyring>=25"]
+all = ["playwright>=1.48", "keyring>=25"]
+
+[project.scripts]
+musebird = "musebird.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/M1778/infinity-musebird"
+Issues = "https://github.com/M1778/infinity-musebird/issues"
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+  "pyright>=1.1.380",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/musebird"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/musebird/prompts" = "musebird/prompts"
+"skills" = "musebird/skills"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501", "B008", "RUF001"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["live: requires a real Muse account (skipped in CI)"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"

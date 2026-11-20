@@ -1,0 +1,27 @@
+infinity-musebird
+=================
+
+This project is MIT licensed. See LICENSE.
+
+Third-party credit
+------------------
+
+The browser automation strategy (persistent Chromium profile, `/api/session` probe,
+`/api/hatch/vm/wake` + `vm_state` polling, Settings -> Usage quota scrape, in-page
+`blob:` download, `__Host-` cookie handling, and the "deny approvals" privacy
+default) is adapted from:
+
+  muse2api — https://github.com/www222fff/muse2api
+  Copyright (c) muse2api contributors
+  MIT License
+
+Concepts and selector names were studied and reimplemented on Playwright; no
+source files were copied verbatim. If any fragment is later copied, the MIT notice
+above applies to that fragment.
+
+Muse, Meta and related names are trademarks of their respective owners. This
+project is unofficial and is not affiliated with, endorsed by, or sponsored by
+Meta or Muse.
+
+Other dependencies keep their own licenses: MCP Python SDK (MIT), Playwright
+(Apache-2.0), keyring (MIT), cryptography (Apache-2.0/BSD).

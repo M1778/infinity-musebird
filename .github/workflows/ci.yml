@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        run: |
+          uv venv --python ${{ matrix.python }}
+          uv pip install -e ".[all]"
+          uv pip install pytest pytest-asyncio ruff pyright
+      - name: Ruff
+        run: uv run ruff check .
+      - name: Type check
+        run: uv run pyright
+        continue-on-error: true
+      - name: Tests
+        run: uv run pytest -q
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: |
+          uv venv
+          uv pip install -e .
+      - name: Scan repository for secrets
+        run: uv run python scripts/scan_repo.py
+
+  installer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: uv pip install --system -e .
+      - name: Install into fixture homes for every harness
+        run: |
+          export HOME=$(mktemp -d)
+          export XDG_CONFIG_HOME="$HOME/.config"
+          mkdir -p "$HOME/.claude" "$HOME/.codex" "$XDG_CONFIG_HOME/opencode"
+          echo '{"theme":"dark"}' > "$HOME/.claude.json"
+          printf '[model]\nname = "x"\n' > "$HOME/.codex/config.toml"
+          echo '{"theme":"dark"}' > "$XDG_CONFIG_HOME/opencode/opencode.json"
+          musebird install --yes --skip-login
+          musebird install --yes --skip-login
+          echo "--- claude ---"; cat "$HOME/.claude.json"
+          echo "--- codex ---"; cat "$HOME/.codex/config.toml"
+          echo "--- opencode ---"; cat "$XDG_CONFIG_HOME/opencode/opencode.json"
+          test $(grep -c musebird "$HOME/.claude.json") -eq 1
+          test -f "$HOME/.claude/skills/inf-muse/SKILL.md"
+          test -f "$HOME/.agents/skills/inf-muse/SKILL.md"
+          musebird uninstall
+          ! grep -q musebird "$HOME/.claude.json"

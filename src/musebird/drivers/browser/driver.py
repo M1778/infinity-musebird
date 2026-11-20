@@ -1,0 +1,397 @@
+"""Playwright browser driver: the default real driver.
+
+Strategy learned from muse2api, but implemented on Playwright for reliability and
+maintainability:
+
+1. A persistent browser profile holds the signed-in session.
+2. `ensure_session` checks `/api/session`; `wake_vm` POSTs the wake endpoint and
+   polls until `vm_state == RUNNING` (a 403 to the wake POST often means the VM is
+   already awake, so the response is never trusted on its own).
+3. One thread per job: the thread URL is persisted in the job record, so a worker
+   restart reattaches instead of creating a new conversation.
+4. Completion uses the sentinel in the reply text; DOM "stop button" state is only
+   a hint. If the DOM changes, the worker still finishes from `MANIFEST.json`.
+5. Files are downloaded through the page: blob URLs are only valid inside the
+   document, so the fetch happens in-page and is handed back as base64.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import contextlib
+import hashlib
+import time
+from pathlib import Path
+from typing import Any
+
+from musebird.config import paths
+from musebird.errors import LoginRequired, UpstreamError
+from musebird.session.vault import Vault
+from musebird.upstream import muse
+
+from ..base import DriverEvent, MuseDriver, Quota, SandboxFile, SessionState, ThreadRef
+
+TIMEOUT = 60_000
+
+
+class BrowserDriver(MuseDriver):
+    name = "browser"
+
+    def __init__(self, job_id: str, *, vault: Vault | None = None) -> None:
+        self.job_id = job_id
+        self.vault = vault or Vault(paths())
+        self._pw: Any = None
+        self._ctx: Any = None
+        self._page: Any = None
+        self._last_text = ""
+        self._stable = 0
+
+    # -- lifecycle -------------------------------------------------------
+    async def _launch(self) -> None:
+        if self._ctx is not None:
+            return
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:  # pragma: no cover
+            from musebird.errors import DriverUnavailable
+
+            raise DriverUnavailable("browser driver needs Playwright") from exc
+        from musebird.browsers import launch_error, launch_kwargs
+
+        self._pw = await async_playwright().start()
+        profile = paths().browser_profile
+        profile.mkdir(parents=True, exist_ok=True)
+        try:
+            self._ctx = await self._pw.chromium.launch_persistent_context(
+                **launch_kwargs(profile, headless=True)
+            )
+        except Exception as exc:
+            await self._pw.stop()
+            self._pw = None
+            raise launch_error(exc) from exc
+        await self._inject_cookies()
+        self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+
+    async def _inject_cookies(self) -> None:
+        """Restore vault cookies into the profile (handles the __Host- prefix rule)."""
+        cookies = self.vault.cookies()
+        if not cookies:
+            return
+        payload = []
+        for name, value in cookies.items():
+            cookie: dict[str, Any] = {
+                "name": name,
+                "value": value,
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+                "sameSite": "Lax",
+            }
+            if name.startswith("__Host-"):
+                # Chromium rejects __Host- cookies that carry a Domain attribute.
+                cookie["url"] = muse.SITE + "/"
+            else:
+                cookie["domain"] = "muse.ai"
+            payload.append(cookie)
+        await self._ctx.add_cookies(payload)
+
+    async def ensure_session(self) -> SessionState:
+        await self._launch()
+        resp = await self._page.request.get(muse.SESSION_API, timeout=TIMEOUT)
+        if resp.status in (401, 403):
+            raise LoginRequired("Muse session expired", hint="Run `musebird login`.")
+        try:
+            body = await resp.json()
+        except Exception:
+            return SessionState(valid=resp.ok, detail="non-JSON session response")
+        return SessionState(
+            valid=str(body.get("status", "")).lower() in ("", "assigned", "ready", "idle"),
+            account=body.get("email") or (body.get("user") or {}).get("email"),
+            detail=f"vm_state={body.get('vm_state')}",
+        )
+
+    async def _session_body(self) -> dict:
+        resp = await self._page.request.get(muse.SESSION_API, timeout=TIMEOUT)
+        if resp.status in (401, 403):
+            raise LoginRequired("Muse session expired", hint="Run `musebird login`.")
+        try:
+            return await resp.json()
+        except Exception:
+            return {}
+
+    async def wake_vm(self) -> str:
+        body = await self._session_body()
+        vm_id = body.get("vm_id")
+        state = body.get("vm_state")
+        if not vm_id or state == muse.VM_DISABLED:
+            return f"vm unavailable ({state or 'no vm_id'})"
+        if state == muse.VM_RUNNING:
+            return "running"
+        payload = {
+            "vm_id": vm_id,
+            "retry_count": 0,
+            "connect_attempt_id": f"musebird-{self.job_id}",
+        }
+        # A 403 here usually means "already running": the state poll is the truth.
+        with contextlib.suppress(Exception):
+            await self._page.request.post(muse.VM_WAKE_API, data=payload, timeout=TIMEOUT)
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            body = await self._session_body()
+            if body.get("vm_state") == muse.VM_RUNNING:
+                return "running"
+            await asyncio.sleep(2.0)
+        return f"wake requested; vm_state={body.get('vm_state')}"
+
+    async def open_thread(self) -> ThreadRef:
+        await self._launch()
+        await self._page.goto(muse.NEW_THREAD_URL, wait_until="domcontentloaded")
+        await self._wait_hydrated()
+        return ThreadRef(id=f"browser-{self.job_id}", url=self._page.url)
+
+    async def reopen(self, url: str) -> ThreadRef:
+        await self._launch()
+        await self._page.goto(url, wait_until="domcontentloaded")
+        await self._wait_hydrated()
+        self._last_text = await self._read_assistant_text()
+        return ThreadRef(id=f"browser-{self.job_id}", url=url)
+
+    async def _wait_hydrated(self, timeout_s: float = 30.0) -> None:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            text = (await self._page.inner_text("body"))[:800].lower()
+            if any(hint in text for hint in muse.LOGIN_HINTS):
+                raise LoginRequired("Muse asked for a sign-in", hint="Run `musebird login`.")
+            state = await self._page.evaluate(
+                "(sel) => document.querySelector(sel)?.getAttribute("
+                "'data-hatch-shell-hydration-state') ?? null",
+                muse.SELECTORS["hydration"],
+            )
+            if state == muse.SELECTORS["hydration_ready"]:
+                return
+            await asyncio.sleep(0.25)
+
+    async def send(self, thread: ThreadRef, text: str, attachments: list[str] | None = None) -> None:
+        if self._page is None:
+            await self.open_thread()
+        page = self._page
+        assert page is not None  # open_thread() either sets it or raised
+        if attachments:
+            await self._attach(attachments)
+        composer = page.locator(muse.SELECTORS["composer"]).first
+        await composer.wait_for(state="visible", timeout=TIMEOUT)
+        await composer.click()
+        await page.keyboard.insert_text(text)
+        button = page.locator(muse.SELECTORS["send_button"]).first
+        with contextlib.suppress(Exception):
+            await button.click(timeout=5000)
+            return
+        await page.keyboard.press("Enter")
+
+    async def _attach(self, files: list[str]) -> None:
+        try:
+            await self._page.set_input_files(muse.SELECTORS["file_input"], files)
+        except Exception as exc:
+            raise UpstreamError(f"attachment upload failed: {type(exc).__name__}") from exc
+
+    async def _read_assistant_text(self) -> str:
+        try:
+            bubbles = await self._page.eval_on_selector_all(
+                muse.SELECTORS["agent_bubble"], "els => els.map(e => e.innerText)"
+            )
+        except Exception:
+            return self._last_text
+        return "\n".join(bubbles[-3:]) if bubbles else ""
+
+    async def _generating(self) -> bool:
+        try:
+            return await self._page.locator(muse.SELECTORS["stop_button"]).count() > 0
+        except Exception:
+            return False
+
+    async def stream_events(self, thread: ThreadRef, cursor: int = 0) -> tuple[list[DriverEvent], int]:
+        if self._page is None:
+            return [], cursor
+        await asyncio.sleep(muse.POLL_INTERVAL_S)
+        text = await self._read_assistant_text()
+        events: list[DriverEvent] = []
+        if len(text) > len(self._last_text):
+            delta = text[len(self._last_text) :]
+            self._last_text = text
+            self._stable = 0
+            events.append(DriverEvent("text", delta))
+        else:
+            self._stable += 1
+        generating = await self._generating()
+        if await self._page.locator(muse.SELECTORS["approval_card"]).count():
+            events.append(
+                DriverEvent("info", "Muse is asking for approval; denying (privacy default)")
+            )
+            with contextlib.suppress(Exception):
+                await self._page.locator(muse.SELECTORS["approval_deny"]).first.click(timeout=3000)
+        if not generating and self._stable >= muse.STABLE_POLLS_DONE and self._last_text:
+            from musebird.prompts import parse_sentinel
+
+            kind, payload = parse_sentinel(self._last_text)
+            if kind == "done":
+                events.append(DriverEvent("done", self._last_text[-400:]))
+            elif kind == "needs_input":
+                events.append(
+                    DriverEvent(
+                        "needs_input", f"{muse.NEEDS_INPUT_SENTINEL} {self.job_id}: {payload}"
+                    )
+                )
+            else:
+                events.append(
+                    DriverEvent("info", "reply finished without a sentinel; will check manifest")
+                )
+        else:
+            events.append(DriverEvent("info", f"generating={generating}"))
+        return events, cursor + len(events)
+
+    # -- files -----------------------------------------------------------
+    async def list_sandbox_files(self, thread: ThreadRef) -> list[SandboxFile]:
+        body = await self._session_body()
+        vm_id = body.get("vm_id")
+        if not vm_id:
+            return []
+        try:
+            resp = await self._page.request.get(
+                f"{muse.SITE}/api/hatch/vm/{vm_id}/files", timeout=TIMEOUT
+            )
+            if not resp.ok:
+                return []
+            data = await resp.json()
+        except Exception:
+            return []
+        out = []
+        for item in data.get("files") or [] if isinstance(data, dict) else []:
+            out.append(
+                SandboxFile(
+                    path=str(item.get("path", "")),
+                    size=int(item.get("size", 0)),
+                    sha256=str(item.get("sha256", "")),
+                    summary=str(item.get("summary", "")),
+                )
+            )
+        return out
+
+    async def download(self, thread: ThreadRef, dest_dir: str) -> list[str]:
+        """Download attachments rendered in the conversation via in-page fetch."""
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        try:
+            blobs = await self._page.eval_on_selector_all(
+                muse.SELECTORS["attachment"],
+                """els => els.map(e => {
+                    const a = e.querySelector('a[download]');
+                    if (a) return {name: a.download, url: a.href};
+                    const v = e.querySelector('a[href^="blob:"], video, img');
+                    return v ? {name: (v.download || e.innerText || 'attachment').trim(),
+                                url: v.src || v.href} : null;
+                }).filter(Boolean)""",
+            )
+        except Exception:
+            blobs = []
+        written: list[str] = []
+        for item in blobs or []:
+            name = _safe_name(item.get("name", "attachment"))
+            url = item.get("url", "")
+            try:
+                b64 = await self._page.evaluate(
+                    """async (url) => {
+                        const r = await fetch(url); const b = await r.arrayBuffer();
+                        let s = ''; const u = new Uint8Array(b);
+                        for (let i = 0; i < u.length; i += 8192)
+                            s += String.fromCharCode(...u.subarray(i, i + 8192));
+                        return btoa(s);
+                    }""",
+                    url,
+                )
+                data = base64.b64decode(b64)
+            except Exception:
+                continue
+            target = dest / name
+            target.write_bytes(data)
+            written.append(str(target))
+        return written
+
+    async def read_quota(self) -> Quota:
+        text = await self._open_usage()
+        from musebird.session.quota import parse_usage_text
+
+        parsed = parse_usage_text(text)
+        return Quota(
+            unit="percent",
+            used=parsed.get("weekly_used_pct"),
+            limit=100.0,
+            resets_at=parsed.get("resets_at"),
+            raw=parsed,
+        )
+
+    async def _open_usage(self) -> str:
+        """Settings -> Usage dialog scrape. Every step is best-effort."""
+        try:
+            await self._page.keyboard.press("Escape")
+            await self._page.keyboard.press("Escape")
+            await self._page.locator(muse.SELECTORS["settings_dock"]).first.click(timeout=5000)
+            for label in muse.SETTINGS_LABELS:
+                item = self._page.get_by_role("menuitem", name=label, exact=False)
+                if await item.count():
+                    await item.first.click(timeout=3000)
+                    break
+            dialog = self._page.locator(muse.SELECTORS["dialog"]).first
+            await dialog.wait_for(timeout=8000)
+            text = await dialog.inner_text()
+            await self._page.keyboard.press("Escape")
+            return text
+        except Exception as exc:
+            raise UpstreamError(
+                f"could not read quota from the Muse UI: {type(exc).__name__}"
+            ) from exc
+
+    async def selftest(self) -> list[dict]:
+        checks: list[dict] = []
+        try:
+            await self._launch()
+        except Exception as exc:
+            return [{"check": "browser launch", "ok": False, "detail": str(exc)}]
+        checks.append({"check": "browser launch", "ok": True, "detail": "ok"})
+        try:
+            state = await self.ensure_session()
+            checks.append({"check": "session", "ok": state.valid, "detail": state.detail})
+        except Exception as exc:
+            checks.append({"check": "session", "ok": False, "detail": type(exc).__name__})
+        await self._page.goto(muse.NEW_THREAD_URL, wait_until="domcontentloaded")
+        for name in ("composer", "send_button", "agent_bubble", "hydration"):
+            try:
+                count = await self._page.locator(muse.SELECTORS[name]).count()
+            except Exception:
+                count = 0
+            checks.append(
+                {"check": f"selector:{name}", "ok": count > 0, "detail": f"{count} match(es)"}
+            )
+        return checks
+
+    async def close(self) -> None:
+        try:
+            if self._ctx is not None:
+                await self._ctx.close()
+            if self._pw is not None:
+                await self._pw.stop()
+        finally:
+            self._ctx = self._pw = self._page = None
+
+
+def _safe_name(name: str) -> str:
+    cleaned = "".join(c for c in name if c.isalnum() or c in "._- ")
+    cleaned = cleaned.replace("/", "_").replace("\\", "_").strip()
+    return cleaned[:120] or "attachment"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+__all__ = ["BrowserDriver"]

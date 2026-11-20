@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/M1778/infinity-musebird/security/advisories/new
+    about: Report privately. Never paste cookies or session data into an issue.
+  - name: Muse terms of service question
+    url: https://muse.ai/terms
+    about: This project is unofficial; questions about using Muse belong with Muse.
