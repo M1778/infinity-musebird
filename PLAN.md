@@ -1,62 +1,61 @@
 # PLAN — infinity-musebird
 
-Building against `Design.md`. Order follows its milestones. Offline-first: every automated test uses
-the `mock` driver; anything requiring a real Muse session is a human gate.
+Built against `DESIGN.md`. Offline-first: every automated test uses the `mock`
+driver; anything needing a real Muse session is a human gate.
 
-## Milestones
+## Status at v0.1.0
 
-| # | Milestone | Deliverable | Human gate |
+| # | Milestone | State | Notes |
 |---|---|---|---|
-| 1 | Scaffold | pyproject, CLI, `MuseDriver` base + mock, job registry (persisted state machine), MCP server exposing all 10 tools, tests | none |
-| 2 | Installer | `musebird install/update/uninstall/doctor`, Claude/Codex/OpenCode adapters, backups, dry-run, `install.sh`, `install.ps1`, fixture tests | none (repo creation after README/license/tests) |
-| 3 | Session | login flow (headed browser), encrypted vault (keyring → 0600 file fallback), keepalive, quota cache, VM wake | `musebird login` by user |
-| 4 | Browser driver | Playwright/CDP persistent thread per job, sentinel completion, resume, `selftest` | live run |
-| 5 | Sync | git-branch landing + bundle fallback, manifest/sha256/path verification, landing worktree | live run |
-| 6 | Skills + guard | both `SKILL.md`, `.musebirdignore`, secret scan, first-upload confirmation, audit log | none |
-| 7 | Fan-out | `tokenburner` mode, agent caps, quota-aware downgrade | live run |
-| 8 | Release | docs, TROUBLESHOOTING, checksums, tag + GitHub release | user confirms publish |
+| 1 | Scaffold | done | pyproject, CLI, `MuseDriver`, mock driver, durable job registry, MCP server with 10 tools |
+| 2 | Installer | done | 3 adapters, backups, dry-run, idempotent, uninstall, fixture tests, repo created and published |
+| 3 | Session | implemented, live-gated | login, AES-GCM vault or keyring, quota cache, VM wake; needs one human sign-in |
+| 4 | Browser driver | implemented, live-gated | persistent profile, side-chat isolation, sentinel completion, resume, selftest |
+| 5 | Sync | done | manifest verify, hostile-archive extraction, review branch that never deletes |
+| 6 | Skills + guard | done | both `SKILL.md`, `.musebirdignore`, secret scan, first-upload approval, audit log |
+| 7 | Fan-out | done | `tokenburner`, agent cap 8, quota-aware scale-down |
+| 8 | Release | done | v0.1.0 tagged, assets + SHA256SUMS, docs, troubleshooting |
 
-## Key design decisions (with reasons)
+## Hard invariants (do not regress)
 
-1. **Single source for Muse's surface.** Every URL, cookie name, selector, and sentinel lives in
-   `src/musebird/upstream/muse.py`. The browser driver imports nothing site-specific from elsewhere.
-2. **Jobs are files.** `~/.infinity-musebird/jobs/<id>.json` is the source of truth. A background
-   worker process (`musebird job-run <id>`) drives the browser so the MCP server can be restarted
-   freely. The registry uses an atomic write (temp + rename) plus a lock file.
-3. **Mock driver is a first-class driver.** It implements the same `MuseDriver` protocol, simulates
-   wake/quota/fanout/sentinel and failure modes, and is what CI exercises end to end.
-4. **Never merge into the working tree.** `muse_files_pull` writes into
-   `<project>/.musebird/landing/<job>/` and can create a git branch from it; the reviewer merges.
-5. **Installer logic is Python only.** `install.sh`/`install.ps1` bootstrap `uv` then delegate to
-   `musebird install`; all merge/backup/idempotency logic is unit tested with fixture homes.
-6. **Guard fails closed.** Secret scan hit, path escape, symlink escape, oversize file, or missing
-   first-upload approval ⇒ refuse and explain; no silent downgrade.
-7. **No secrets in logs.** Vault redacts values; audit log stores prompt hashes and file *names*,
-   never contents.
+1. **Side chat only.** Every job runs in a Muse side chat. The driver verifies the
+   marker and raises rather than writing into the main conversation. Resume
+   re-checks it. Covered by `tests/test_side_chat.py`.
+2. **Landing only adds and modifies.** A review branch never stages a deletion, so
+   merging it cannot wipe a repository. Covered by
+   `tests/test_worker.py::test_git_landing_never_deletes_existing_files`.
+3. **Muse output is untrusted.** Paths validated, hashes required (no empty-field
+   bypass), unlisted files fail the job, archives checked for traversal and links,
+   nothing returned is ever executed.
+4. **Secure defaults cannot be un-ignored.** A repository's `.musebirdignore` can
+   ignore more, never less.
+5. **Secrets never leave by accident.** Regex + entropy scan before every upload and
+   push; audit log stores hashes and file names only.
+6. **`doctor` tells the truth.** Session validity is `null` until probed live; every
+   failure carries a one-line fix.
 
-## Layout of the work
+## Key decisions
 
-```
-src/musebird/
-  cli.py mcp_server.py config.py errors.py audit.py
-  installer/{detect,backup,merge,adapters,installer,doctor}.py
-  session/{vault,login,keepalive,quota}.py
-  drivers/{base,mock}.py drivers/browser/{driver,selectors}.py
-  upstream/muse.py
-  jobs/{registry,worker,state}.py
-  sync/{manifest,landing,bundle,git}.py
-  guard/{ignore,secrets,paths}.py
-  prompts/contract.md
-```
+1. **Jobs are files.** `~/.infinity-musebird/jobs/<id>.json` is the truth; a
+   detached worker (`musebird job-run <id>`) drives the browser. The MCP server and
+   harness can restart freely; resume reattaches to the saved thread.
+2. **Mock driver is first class.** CI proves the full job lifecycle without network
+   or an account.
+3. **Installer logic is Python.** `install.sh`/`install.ps1` only bootstrap `uv`;
+   all merge/backup/idempotency logic is unit tested against fixture homes.
+4. **Prompts carry a contract.** Sentinels plus `MANIFEST.json` with sha256 per file;
+   the last sentinel in the text wins, so a resumed thread's old question is ignored.
 
-## Verification per milestone
+## Open / human-gated
 
-- `uv run pytest`, `uv run ruff check`, `uv run mypy src` (or pyright) all green.
-- Milestone 2: install → doctor → uninstall on fixture homes for each harness, twice (idempotency),
-  plus `--dry-run` writes nothing.
-- Milestone 1/6: end-to-end MCP client test starts `musebird mcp` and drives a full mock job.
+- First live run against a signed-in account: `musebird doctor --selftest` and
+  `MUSEBIRD_LIVE=1 pytest tests/test_live.py -s`. This names any selector or endpoint
+  that changed, including the side-chat control.
+- Sandbox `git push` is unverified (Muse gates egress); bundle download is the
+  supported sync path.
+- Muse's UI could change at any time; `upstream/muse.py` is the single file to edit.
 
-## Open questions tracked in docs/HARNESS_NOTES.md
+## Verification
 
-Third-party details are verified against current docs (subagent research + direct fetch) with dates.
-Anything live-account dependent is left behind a human gate and marked `@pytest.mark.live`.
+`./scripts/check.sh` = ruff, pyright, wheel build, pytest, repository secret scan.
+Same as CI on Linux/macOS/Windows. 131 tests, 3 live tests skipped by design.
