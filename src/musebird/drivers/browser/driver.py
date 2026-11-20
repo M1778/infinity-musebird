@@ -45,6 +45,7 @@ class BrowserDriver(MuseDriver):
         self._ctx: Any = None
         self._page: Any = None
         self._last_text = ""
+        self._bubble_count: int | None = None
         self._stable = 0
 
     # -- lifecycle -------------------------------------------------------
@@ -145,16 +146,48 @@ class BrowserDriver(MuseDriver):
         return f"wake requested; vm_state={body.get('vm_state')}"
 
     async def open_thread(self) -> ThreadRef:
+        """Open a *side chat*: isolated context, never the account's main chat.
+
+        This is an invariant, not a preference. If the side-chat control cannot be
+        found or does not produce a side chat, the driver raises instead of typing
+        into the main conversation, because continuing the user's main chat is the
+        one outcome that must never happen silently.
+        """
         await self._launch()
         await self._page.goto(muse.NEW_THREAD_URL, wait_until="domcontentloaded")
         await self._wait_hydrated()
+        if not await self._enter_side_chat():
+            raise UpstreamError(
+                "could not open a Muse side chat; refusing to run in the main chat",
+                hint=(
+                    "Muse's side-chat control changed. Update SIDE_CHAT_* in "
+                    "src/musebird/upstream/muse.py, then run `musebird doctor --selftest`."
+                ),
+            )
         return ThreadRef(id=f"browser-{self.job_id}", url=self._page.url)
+
+    async def _enter_side_chat(self) -> bool:
+        """Click the side-chat control and confirm the thread really is one."""
+        page = self._page
+        # Already a side chat (Muse may remember the last mode): nothing to do.
+        if await page.locator(muse.SELECTORS["side_chat_marker"]).count():
+            return True
+        with contextlib.suppress(Exception):
+            await page.locator(muse.SIDE_CHAT_BUTTON).first.click(timeout=5000)
+            await asyncio.sleep(0.5)
+        return bool(await page.locator(muse.SELECTORS["side_chat_marker"]).count())
 
     async def reopen(self, url: str) -> ThreadRef:
         await self._launch()
         await self._page.goto(url, wait_until="domcontentloaded")
         await self._wait_hydrated()
-        self._last_text = await self._read_assistant_text()
+        if not await page_is_side_chat(self._page):
+            raise UpstreamError(
+                "refusing to resume: the saved thread is not a side chat",
+                hint="Start a new job; the old thread will not be reused.",
+            )
+        self._last_text = ""
+        self._bubble_count = len(await self._read_bubbles())
         return ThreadRef(id=f"browser-{self.job_id}", url=url)
 
     async def _wait_hydrated(self, timeout_s: float = 30.0) -> None:
@@ -195,14 +228,27 @@ class BrowserDriver(MuseDriver):
         except Exception as exc:
             raise UpstreamError(f"attachment upload failed: {type(exc).__name__}") from exc
 
-    async def _read_assistant_text(self) -> str:
+    async def _read_bubbles(self) -> list[str]:
         try:
-            bubbles = await self._page.eval_on_selector_all(
+            return await self._page.eval_on_selector_all(
                 muse.SELECTORS["agent_bubble"], "els => els.map(e => e.innerText)"
             )
         except Exception:
-            return self._last_text
-        return "\n".join(bubbles[-3:]) if bubbles else ""
+            return []
+
+    async def _read_assistant_text(self) -> str:
+        """Text of the current turn's reply, plus the previous bubble for context.
+
+        Keying on bubble count matters: a resumed thread still renders the old
+        question, and diffing against it would hide the new reply.
+        """
+        bubbles = await self._read_bubbles()
+        if not bubbles:
+            return ""
+        if self._bubble_count is not None and len(bubbles) <= self._bubble_count:
+            # Same turn still streaming: only the newest bubble can change.
+            return bubbles[-1]
+        return "\n".join(bubbles[-2:]) if len(bubbles) > 1 else bubbles[-1]
 
     async def _generating(self) -> bool:
         try:
@@ -214,6 +260,11 @@ class BrowserDriver(MuseDriver):
         if self._page is None:
             return [], cursor
         await asyncio.sleep(muse.POLL_INTERVAL_S)
+        bubbles = await self._read_bubbles()
+        if bubbles and self._bubble_count is not None and len(bubbles) > self._bubble_count:
+            # A new bubble begins: the previous reply is history, not this turn.
+            self._bubble_count = len(bubbles)
+            self._last_text = ""
         text = await self._read_assistant_text()
         events: list[DriverEvent] = []
         if len(text) > len(self._last_text):
@@ -246,8 +297,10 @@ class BrowserDriver(MuseDriver):
                 events.append(
                     DriverEvent("info", "reply finished without a sentinel; will check manifest")
                 )
-        else:
-            events.append(DriverEvent("info", f"generating={generating}"))
+        elif generating:
+            # Only report real work. A quiet poll returning "info" would reset the
+            # worker's idle timer forever and grow the event log one line per poll.
+            events.append(DriverEvent("progress", "Muse is working"))
         return events, cursor + len(events)
 
     # -- files -----------------------------------------------------------
@@ -382,6 +435,14 @@ class BrowserDriver(MuseDriver):
                 await self._pw.stop()
         finally:
             self._ctx = self._pw = self._page = None
+
+
+async def page_is_side_chat(page) -> bool:
+    """A thread counts as a side chat only when Muse itself marks it as one."""
+    try:
+        return await page.locator(muse.SELECTORS["side_chat_marker"]).count() > 0
+    except Exception:
+        return False
 
 
 def _safe_name(name: str) -> str:

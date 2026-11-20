@@ -96,8 +96,20 @@ def land_to_branch(
         if parent:
             subprocess.run([*base, "read-tree", parent], cwd=source, env=env, check=True,
                            capture_output=True, text=True)
-        subprocess.run([*base, "add", "-A", "--", "."], cwd=source, env=env, check=True,
-                       capture_output=True, text=True)
+        # Add only the files that actually exist in the landing area, by name.
+        # `git add -A -- .` would stage every parent file missing from the landing
+        # directory as a deletion, so merging the review branch would wipe the repo.
+        # Landing results only ever add or modify; deletion stays a human decision.
+        files = [
+            p.relative_to(source).as_posix()
+            for p in sorted(source.rglob("*"))
+            if p.is_file() and ".git" not in p.relative_to(source).parts
+        ]
+        for start in range(0, len(files), 200):
+            subprocess.run(
+                [*base, "add", "--", *files[start : start + 200]],
+                cwd=source, env=env, check=True, capture_output=True, text=True,
+            )
         tree = subprocess.run([*base, "write-tree"], cwd=source, env=env, check=True,
                               capture_output=True, text=True).stdout.strip()
         args = ["commit-tree", tree, "-m", f"musebird: land results for {job_id}"]

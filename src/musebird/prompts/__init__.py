@@ -37,14 +37,16 @@ NEEDS_INPUT_RE = re.compile(rf"{re.escape(muse.NEEDS_INPUT_SENTINEL)}\s+(\S+?):\
 def parse_sentinel(text: str) -> tuple[str, str | None]:
     """Parse a batch of streamed text into `(kind, payload)`.
 
-    kind is one of `done`, `needs_input`, `none`. The match is anchored to the
-    sentinel token wherever it appears in the text, matching the last occurrence
-    so a model that quotes the contract earlier does not trigger early.
+    kind is one of `done`, `needs_input`, `none`. Whichever sentinel appears *last*
+    wins: a resumed thread still shows the question that was already answered, and
+    the reply to it must not be mistaken for a new question.
     """
-    needs = NEEDS_INPUT_RE.findall(text)
-    if needs:
-        return "needs_input", needs[-1][1].strip()
-    done = DONE_RE.findall(text)
-    if done:
-        return "done", done[-1]
-    return "none", None
+    candidates: list[tuple[int, str, str]] = []
+    for match in NEEDS_INPUT_RE.finditer(text):
+        candidates.append((match.start(), "needs_input", match.group(2).strip()))
+    for match in DONE_RE.finditer(text):
+        candidates.append((match.start(), "done", match.group(1)))
+    if not candidates:
+        return "none", None
+    _, kind, payload = max(candidates, key=lambda item: item[0])
+    return kind, payload

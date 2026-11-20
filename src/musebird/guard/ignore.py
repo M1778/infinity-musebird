@@ -85,7 +85,11 @@ class Ignore:
         cfg = project / ".musebirdignore"
         if cfg.is_file():
             text = cfg.read_text(encoding="utf-8", errors="replace")
-        self.rules = parse("\n".join(DEFAULT_PATTERNS)) + parse(text)
+        # Two separate rule sets: a project file may freely ignore *more*, but it
+        # cannot un-ignore something the secure defaults block. Otherwise a cloned
+        # repo could ship `!.env` and have the tool upload secrets.
+        self.secure_rules = parse("\n".join(DEFAULT_PATTERNS))
+        self.rules = parse(text)
 
     def ignored(self, path: Path) -> bool:
         try:
@@ -93,6 +97,9 @@ class Ignore:
         except ValueError:
             return True  # outside the project: always ignored for upload
         is_dir = path.is_dir()
+        for rule in self.secure_rules:
+            if not rule.negate and rule.matches(rel, is_dir):
+                return True  # secure defaults always win
         decision = False
         for rule in self.rules:
             if rule.matches(rel, is_dir):

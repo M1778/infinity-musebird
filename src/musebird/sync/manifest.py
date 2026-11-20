@@ -72,7 +72,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+_SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
+
+
 def verify(root: Path, entries: list[Entry]) -> VerifyResult:
+    """Verify every entry strictly.
+
+    A manifest without a usable sha256 and size is rejected rather than trusted:
+    skipping empty fields would let `{"path": "a.txt"}` verify as OK.
+    """
     verified: list[str] = []
     mismatched: list[dict] = []
     for entry in entries:
@@ -80,15 +88,38 @@ def verify(root: Path, entries: list[Entry]) -> VerifyResult:
         if not target.is_file():
             mismatched.append({"path": entry.path, "reason": "missing"})
             continue
+        if not _SHA256.match(entry.sha256):
+            mismatched.append({"path": entry.path, "reason": "missing or malformed sha256"})
+            continue
+        if entry.size <= 0 and target.stat().st_size != 0:
+            mismatched.append({"path": entry.path, "reason": f"no size declared, file is {target.stat().st_size}"})
+            continue
         size = target.stat().st_size
-        if entry.size and size != entry.size:
+        if size != entry.size:
             mismatched.append({"path": entry.path, "reason": f"size {size} != {entry.size}"})
             continue
-        if entry.sha256 and sha256_file(target) != entry.sha256:
+        if sha256_file(target) != entry.sha256:
             mismatched.append({"path": entry.path, "reason": "sha256 mismatch"})
             continue
         verified.append(entry.path)
     return VerifyResult(entries=entries, verified=verified, mismatched=mismatched)
+
+
+def find_unlisted(root: Path, entries: list[Entry]) -> list[str]:
+    """Files present in the landing area but absent from the manifest.
+
+    These would otherwise be committed to the review branch unverified.
+    """
+    listed = {e.path for e in entries}
+    found = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if rel == "MANIFEST.json" or rel in listed:
+            continue
+        found.append(rel)
+    return found
 
 
 def find_manifest(root: Path, name: str = "MANIFEST.json") -> Path | None:

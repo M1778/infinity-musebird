@@ -30,13 +30,18 @@ class Quota:
         return max(0.0, min(1.0, 1.0 - (self.used / self.limit)))
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "unit": self.unit,
             "used": self.used,
             "limit": self.limit,
             "remaining_ratio": self.remaining_ratio,
             "resets_at": self.resets_at,
         }
+        # Keep the parsed details (plan, extra balance) so `muse_status` can show
+        # them without scraping Muse again.
+        if self.raw:
+            out["detail"] = self.raw
+        return out
 
 
 @dataclass

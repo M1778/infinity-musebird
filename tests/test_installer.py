@@ -145,3 +145,33 @@ def test_detect_shape(sandbox_home):
     for h in (claude(), codex(), opencode()):
         assert h.name in ("claude", "codex", "opencode")
         assert isinstance(h.home, Path)
+
+
+def test_toml_merge_preserves_sections_after_ours(tmp_path):
+    """Our table in the middle of the file must not swallow what follows."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[model]\nname = "x"\n\n'
+        '[mcp_servers.musebird]\ncommand = "old"\nargs = []\n\n'
+        '[ui]\ntheme = "dark"\n\n'
+        '[mcp_servers.other]\ncommand = "y"\n'
+    )
+    assert merge.merge_toml_server(cfg) is True
+    text = cfg.read_text()
+    assert '[ui]' in text and 'theme = "dark"' in text
+    assert '[mcp_servers.other]' in text
+    assert text.count("[mcp_servers.musebird]") == 1
+    assert merge.read_toml_section(cfg)["command"] == "musebird"
+
+    assert merge.remove_toml_server(cfg) is True
+    after = cfg.read_text()
+    assert '[ui]' in after and '[mcp_servers.other]' in after
+    assert "[mcp_servers.musebird]" not in after
+
+
+def test_toml_merge_is_idempotent_with_following_sections(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[mcp_servers.musebird]\ncommand = "musebird"\nargs = ["mcp"]\n\n[x]\na = 1\n')
+    before = cfg.read_text()
+    assert merge.merge_toml_server(cfg) is False
+    assert cfg.read_text() == before or cfg.read_text().strip() == before.strip()

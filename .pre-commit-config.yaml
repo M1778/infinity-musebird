@@ -1,0 +1,20 @@
+# Pre-commit secret scanning. Install once per clone:
+#   pip install pre-commit && pre-commit install
+# Or skip the dependency and use the plain hook:
+#   printf '#!/bin/sh\npython scripts/scan_repo.py --staged\n' > .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+repos:
+  - repo: local
+    hooks:
+      - id: musebird-secret-scan
+        name: secret scan (staged files)
+        entry: python scripts/scan_repo.py --staged
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: musebird-ruff
+        name: ruff
+        entry: ruff check .
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

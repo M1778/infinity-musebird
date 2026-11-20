@@ -104,3 +104,50 @@ def test_zip_oversize_blocked(tmp_path):
 
     with pytest.raises(GuardViolation):
         bundle.extract(big, tmp_path / "land", Caps(max_file=1024))
+
+
+def test_normal_zip_regular_files_are_accepted(tmp_path):
+    """S_IFREG (0o100000) also intersects 0o120000 naively; only S_IFLNK is a link."""
+    archive = tmp_path / "normal.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        info = zipfile.ZipInfo("src/app.py")
+        info.external_attr = (0o100644 << 16)  # regular file, 0644
+        zf.writestr(info, "print(1)\n")
+    written = bundle.extract(archive, tmp_path / "land")
+    assert (tmp_path / "land" / "src" / "app.py").read_text() == "print(1)\n"
+    assert written
+
+
+def test_zip_directory_entries_are_accepted(tmp_path):
+    archive = tmp_path / "dirs.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        info = zipfile.ZipInfo("src/")
+        info.external_attr = (0o40755 << 16) | 0x10
+        zf.writestr(info, "")
+        zf.writestr("src/a.txt", "x")
+    bundle.extract(archive, tmp_path / "land2")
+    assert (tmp_path / "land2" / "src" / "a.txt").is_file()
+
+
+def test_manifest_entry_without_hash_is_rejected(tmp_path):
+    (tmp_path / "a.txt").write_text("hi")
+    entry = manifest.Entry(path="a.txt", sha256="", size=0)
+    result = manifest.verify(tmp_path, [entry])
+    assert not result.ok
+    assert "sha256" in result.mismatched[0]["reason"]
+
+
+def test_manifest_entry_with_bad_size_is_rejected(tmp_path):
+    data = b"hi"
+    (tmp_path / "a.txt").write_bytes(data)
+    good = hashlib.sha256(data).hexdigest()
+    assert not manifest.verify(tmp_path, [manifest.Entry("a.txt", good, 99)]).ok
+    assert manifest.verify(tmp_path, [manifest.Entry("a.txt", good, 2)]).ok
+    assert not manifest.verify(tmp_path, [manifest.Entry("a.txt", "0" * 64, 2)]).ok
+
+
+def test_unlisted_files_are_reported(tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+    (tmp_path / "sneaky.sh").write_text("rm -rf /")
+    entries = [manifest.Entry("a.txt", hashlib.sha256(b"x").hexdigest(), 1)]
+    assert manifest.find_unlisted(tmp_path, entries) == ["sneaky.sh"]

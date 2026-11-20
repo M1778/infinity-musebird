@@ -27,6 +27,7 @@ Verified **2026-11-20** against the live site and
 | Official API | **None for the Muse agent.** `dev.meta.ai` is the Meta Model API (models, not the agent) and `Muse Code` is a separate terminal product. |
 | Sandbox git push | **Unverified.** Sentinel gates egress, no confirmation that `git push` works. Do not depend on it: bundle download is the primary sync path. |
 | Subagents | Consumer Muse has side chats and parallel tasks but no documented subagent syntax. Fan-out is therefore a **prompt contract** ("decompose, run N agents, cross-review, merge"), not an API feature. |
+| Side chat | Use regardless of user preference: every job runs in a side chat so the main conversation is untouched. The control is a UI element, so `SIDE_CHAT_BUTTON` / `side_chat_marker` are selectors that `selftest` reports on. |
 
 Fragile selectors (ranked, from muse2api's `dom.py`, which its authors describe as
 the single point of breakage): `div[class*="hatch-agent-bubble-bg"]` (CSS-module

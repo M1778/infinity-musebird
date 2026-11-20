@@ -91,8 +91,9 @@ musebird update                       # refresh skills and config after an upgra
 2. `muse_job_start` returns a job id immediately. A detached worker drives a real
    browser, wakes the Muse sandbox VM, sends the task plus a prompt contract, and
    streams events to disk.
-3. Muse writes output to `out/` with a `MANIFEST.json` (sha256 per file) and prints
-   a completion sentinel.
+3. Every job runs in its own Muse **side chat**, never your main conversation, and
+   the driver refuses to run if it cannot verify that isolation. Muse writes output
+   to `out/` with a `MANIFEST.json` (sha256 per file) and prints a completion sentinel.
 4. `muse_files_pull` verifies every hash and commits the result to
    `musebird/<job_id>` — never into your working tree.
 5. You review the diff and decide whether to merge.
@@ -131,8 +132,16 @@ uv pip install pytest pytest-asyncio ruff pyright
 ```
 
 The entire suite runs against the mock driver. Live tests are marked `@pytest.mark.live`
-and skipped by default. See [CONTRIBUTING.md](CONTRIBUTING.md) and
-[docs/HARNESS_NOTES.md](docs/HARNESS_NOTES.md) for the verified harness/Muse details.
+and skipped by default; run them deliberately against your own account to check that
+Muse's selectors still match:
+
+```bash
+MUSEBIRD_LIVE=1 .venv/bin/python -m pytest tests/test_live.py -v -s
+```
+
+`./scripts/check.sh` is the full gate (lint, types, wheel, tests, secret scan).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/HARNESS_NOTES.md](docs/HARNESS_NOTES.md)
+for the verified harness/Muse details.
 
 ## Documentation
 

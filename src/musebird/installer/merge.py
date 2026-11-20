@@ -63,25 +63,56 @@ def remove_json_server(path: Path) -> bool:
 
 
 TOML_SECTION = "mcp_servers.musebird"
-# A section body ends at the next line that starts a new table.
-TOML_SECTION_RE = rf"(?ms)^\[{re.escape(TOML_SECTION)}\][^\n]*(?:\n(?!\[).*)*\n?"
+
+
+def _split_sections(text: str) -> list[tuple[str | None, list[str]]]:
+    """Split a TOML file into (header, body lines) chunks.
+
+    A header is the table name without brackets; `None` is the leading chunk before
+    the first table (top-level keys and comments). Line-based on purpose: a regex
+    over the whole file easily swallows the sections that follow ours.
+    """
+    chunks: list[tuple[str | None, list[str]]] = [(None, [])]
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]") and not stripped.startswith("[["):
+            chunks.append((stripped[1:-1].strip(), [line]))
+        else:
+            chunks[-1][1].append(line)
+    return chunks
+
+
+def _render(chunks: list[tuple[str | None, list[str]]]) -> str:
+    out = "".join("".join(lines) for _, lines in chunks)
+    return out.rstrip() + "\n" if out else ""
 
 
 def merge_toml_server(path: Path, command: str = "musebird", args: list[str] | None = None) -> bool:
-    """Add or replace the `[mcp_servers.musebird]` section in a TOML file."""
+    """Add or replace the `[mcp_servers.musebird]` table, preserving every other."""
     args = args or ["mcp"]
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
-    block = (
-        f"[{TOML_SECTION}]\n"
-        f'command = "{command}"\n'
-        f"args = [{', '.join(json.dumps(a) for a in args)}]\n"
-    )
-    pattern = re.compile(TOML_SECTION_RE)
-    if pattern.search(text):
-        new_text = pattern.sub(lambda _: block, text, count=1)
-    else:
-        new_text = text.rstrip() + ("\n\n" if text.strip() else "") + block
+    block = [
+        f"[{TOML_SECTION}]\n",
+        f'command = "{command}"\n',
+        f"args = [{', '.join(json.dumps(a) for a in args)}]\n",
+    ]
+    chunks = _split_sections(text)
+    replaced = False
+    for index, (header, old_lines) in enumerate(chunks):
+        if header == TOML_SECTION:
+            # Keep the blank separator the old table ended with, so re-running the
+            # installer is a byte-for-byte no-op instead of a whitespace shuffle.
+            trailing = [line for line in old_lines[len(block) :] if not line.strip()]
+            chunks[index] = (header, block + trailing)
+            replaced = True
+            break
+    if not replaced:
+        if chunks[-1][1] and not "".join(chunks[-1][1]).endswith("\n"):
+            chunks[-1][1].append("\n")
+        chunks.append(("", ["\n"]))
+        chunks.append((TOML_SECTION, block))
+    new_text = _render(chunks)
     if new_text == text:
         return False
     path.write_text(new_text, encoding="utf-8")
@@ -92,11 +123,11 @@ def remove_toml_server(path: Path) -> bool:
     if not path.exists():
         return False
     text = path.read_text(encoding="utf-8")
-    pattern = re.compile(TOML_SECTION_RE)
-    new_text = pattern.sub("", text).strip() + "\n"
-    if new_text == text:
+    chunks = _split_sections(text)
+    kept = [c for c in chunks if c[0] != TOML_SECTION]
+    if len(kept) == len(chunks):
         return False
-    path.write_text(new_text, encoding="utf-8")
+    path.write_text(_render(kept), encoding="utf-8")
     return True
 
 

@@ -103,3 +103,24 @@ def test_worker_process_entry_runs(tmp_path, project):
     # job-run uses the mock driver only when the job record says so
     result = asyncio.run(run_job(job.id, driver=MockDriver(job.id), poll=0.01))
     assert result.state == st.DONE
+
+
+async def test_git_landing_never_deletes_existing_files(tmp_path, git_project):
+    """A landing branch must only add/modify; merging it must not wipe the repo."""
+    import subprocess
+
+    job, _ = await _run(tmp_path, git_project, sync="git")
+    assert job.state == st.DONE
+    # the seed file must still exist on the branch
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", job.branch],
+        cwd=git_project, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert "README.md" in tree, f"landing branch deleted existing files: {tree}"
+    assert "hello.txt" in tree
+    # and the diff must not contain deletions of pre-existing files
+    diff = subprocess.run(
+        ["git", "diff", "--diff-filter=D", "--name-only", f"HEAD...{job.branch}"],
+        cwd=git_project, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert diff == [], f"landing branch deletes: {diff}"

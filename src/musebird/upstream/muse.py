@@ -16,9 +16,21 @@ The browser driver degrades to text scanning and the worker falls back to
 from __future__ import annotations
 
 SITE = "https://muse.ai"
+# New work always starts in a *side chat*, never the account's main chat. The
+# product's side-chat control is a UI action, so the driver opens a fresh thread
+# and then uses this control; the label list is localized like the settings menu.
 NEW_THREAD_URL = f"{SITE}/thread/new"
 THREAD_URL = f"{SITE}/thread/{{thread_id}}"
 LOGIN_URL = SITE
+
+# Side chat: a separate conversation branch with its own context, so a job never
+# pollutes or continues the user's main conversation. Verified surface: the thread
+# header control; labels are localized because the account language is not ours.
+SIDE_CHAT_LABELS = ("Side chat", "Sidechat", "サイドチャット", "側邊聊天", "侧边聊天")
+SIDE_CHAT_BUTTON = (
+    'button[aria-label*="Side chat" i], button[data-testid*="side-chat" i], '
+    'button[aria-label*="Sidechat" i]'
+)
 # Authenticated JSON probe: 200 with status == "assigned" means a live session.
 SESSION_API = f"{SITE}/api/session"
 VM_WAKE_API = f"{SITE}/api/hatch/vm/wake"
@@ -60,6 +72,8 @@ SELECTORS = {
     "menu_item": "[role=menuitem]",
     "dialog": '[role="dialog"], [aria-modal="true"]',
     "file_input": 'input[type="file"]',
+    # Marks a thread that is a side chat rather than the main conversation.
+    "side_chat_marker": '[data-thread-kind="side"], [data-testid*="side-chat" i]',
 }
 
 # Menu labels used to reach Settings -> Usage (quota). Localized on purpose: the

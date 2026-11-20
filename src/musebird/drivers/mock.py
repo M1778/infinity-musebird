@@ -74,12 +74,22 @@ class MockDriver(MuseDriver):
         return "running"
 
     async def open_thread(self) -> ThreadRef:
-        self._thread = ThreadRef(id=f"mock-thread-{self.job_id}", url="mock://thread")
+        # Mirrors the browser driver's invariant: jobs run in a side chat only.
+        if self.scenario == "no_side_chat":
+            from musebird.errors import UpstreamError
+
+            raise UpstreamError(
+                "could not open a Muse side chat; refusing to run in the main chat",
+                hint="Update SIDE_CHAT_* in upstream/muse.py.",
+            )
+        self._thread = ThreadRef(
+            id=f"mock-thread-{self.job_id}", url="mock://thread/side-chat"
+        )
         return self._thread
 
     async def reopen(self, url: str) -> ThreadRef:
         """Resume an existing thread; a pending question counts as answered."""
-        self._thread = ThreadRef(id=f"mock-thread-{self.job_id}", url=url or "mock://thread")
+        self._thread = ThreadRef(id=f"mock-thread-{self.job_id}", url=url or "mock://thread/side-chat")
         self._sent = True
         self._finished = False
         self._rounds = 0

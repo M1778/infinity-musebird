@@ -37,3 +37,23 @@ def test_prompt_contains_contract_and_task(tmp_path):
     assert "4 subagents" in prompt
     assert muse.DONE_SENTINEL in prompt
     assert "MANIFEST.json" in prompt
+
+
+def test_done_after_an_old_question_wins(tmp_path):
+    """A resumed thread still shows the old question; the new DONE must win."""
+    text = (
+        f"{muse.NEEDS_INPUT_SENTINEL} job_1: Which framework?\n"
+        "Use React.\n"
+        f"All finished.\n{muse.DONE_SENTINEL} job_1"
+    )
+    assert parse_sentinel(text) == ("done", "job_1")
+
+
+def test_question_after_an_old_done_wins(tmp_path):
+    text = f"{muse.DONE_SENTINEL} job_1\nActually, one more thing...\n{muse.NEEDS_INPUT_SENTINEL} job_1: Which colour?"
+    assert parse_sentinel(text) == ("needs_input", "Which colour?")
+
+
+def test_done_inside_quoted_contract_does_not_win(tmp_path):
+    text = f"The contract says print {muse.DONE_SENTINEL} <job_id>, then:\n{muse.DONE_SENTINEL} job_2"
+    assert parse_sentinel(text) == ("done", "job_2")

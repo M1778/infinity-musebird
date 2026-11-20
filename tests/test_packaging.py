@@ -91,7 +91,7 @@ def test_cli_entrypoint_importable():
     commands = set(actions[0].choices)
     for name in (
         "install", "update", "uninstall", "login", "logout", "status", "doctor",
-        "mcp", "jobs", "job-run",
+        "mcp", "jobs", "job-run", "version",
     ):
         assert name in commands, f"missing command: {name}"
 

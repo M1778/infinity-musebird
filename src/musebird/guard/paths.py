@@ -64,6 +64,8 @@ def check_upload(paths: list[Path], root: Path, caps: Caps = Caps()) -> list[Pat
             resolved.append(p)
     if count > caps.max_files:
         raise GuardViolation(f"too many files: {count} > {caps.max_files}")
+    if total > caps.max_total:
+        raise GuardViolation(f"upload too large: {total} bytes > {caps.max_total}")
     return resolved
 
 

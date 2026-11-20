@@ -147,7 +147,11 @@ class JobRegistry:
         if job.terminal:
             return job
         self._cancel_flag(job_id).write_text("1")
-        if job.state == st.QUEUED:
+        if job.state in (st.QUEUED, st.NEEDS_INPUT):
+            # Nothing is running for either state, so cancellation is immediate.
+            # Leaving needs_input here would let a late answer restart the job while
+            # the cancel flag is still set, which cancels it again mid-flow.
+            self._cancel_flag(job_id).unlink(missing_ok=True)
             return self.update(job_id, state=st.CANCELLED)
         self.append_event(job_id, "cancel requested", kind="info")
         return job
@@ -173,15 +177,19 @@ class JobRegistry:
         if not path.exists():
             return [], cursor
         out: list[dict] = []
+        seen = 0
         with open(path, encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh):
                 if i < cursor:
                     continue
+                seen += 1
                 try:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
+                    # A corrupt line still occupies a cursor position; skipping it
+                    # without counting would rewind the cursor and replay events.
                     continue
-        return out, cursor + len(out)
+        return out, cursor + seen
 
     def clear_cancel(self, job_id: str) -> None:
         self._cancel_flag(job_id).unlink(missing_ok=True)

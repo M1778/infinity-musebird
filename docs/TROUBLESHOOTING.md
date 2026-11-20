@@ -119,3 +119,19 @@ write `out.tar.zst` and `MANIFEST.json` and attach the bundle.
 **The diff includes files I did not want**
 
 Add them to `.musebirdignore` and re-run. Push never re-adds ignored paths.
+
+## Verifying against a real account
+
+The browser driver's selectors are a snapshot of Muse's UI. When Muse ships a
+change, find out exactly what broke instead of guessing:
+
+```bash
+MUSEBIRD_LIVE=1 .venv/bin/python -m pytest tests/test_live.py -v -s
+```
+
+`test_selftest_reports_every_selector` prints one line per selector and fails
+naming the broken ones. Fix them in `src/musebird/upstream/muse.py` — nothing else
+should need to change — and record the date in `docs/HARNESS_NOTES.md`.
+
+`test_single_job_end_to_end` is the real acceptance test: it starts a live job in a
+throwaway git repo and asserts that files land on a review branch with a manifest.

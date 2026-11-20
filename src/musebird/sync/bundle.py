@@ -77,7 +77,9 @@ def _extract_zip(archive: Path, dest: Path, caps: Caps) -> list[str]:
         for info in infos:
             target = safe_member(dest, info.filename)
             mode = info.external_attr >> 16
-            if mode & 0o120000:  # symlink bit
+            # Compare the whole file-type field: S_IFREG (0o100000) also passes a
+            # naive `mode & 0o120000` check, which rejected every normal archive.
+            if (mode & 0o170000) == 0o120000:  # S_IFLNK
                 raise GuardViolation(f"archive contains a link: {info.filename}")
             if info.is_dir():
                 target.mkdir(parents=True, exist_ok=True)

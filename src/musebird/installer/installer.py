@@ -92,6 +92,8 @@ def install(
             )
         report.harnesses.append(entry)
 
+    _ensure_browser(dry_run=dry_run, report=report)
+
     if not dry_run:
         state["harnesses"] = sorted(installed_names)
         state["skills"] = sorted(installed_skills)
@@ -247,17 +249,128 @@ def doctor(*, selftest: bool = False, paths_: Paths | None = None, live: bool = 
     if live:
         checks.extend(_live_checks())
     if selftest:
-        checks.append(
-            Check("live selectors", False, "requires a real account",
-                  "Run `musebird doctor --selftest` interactively on a logged-in machine.")
-        )
+        checks.extend(_selftest_checks())
     return checks
+
+
+def _selftest_checks() -> list[Check]:
+    """Probe Muse for real: session, VM wake, quota, and every selector.
+
+    Returns a single explanatory failure (not a misleading PASS) when there is no
+    session, because selectors cannot be checked without one.
+    """
+    import asyncio
+
+    from musebird.drivers.browser.driver import BrowserDriver
+    from musebird.session.vault import Vault
+
+    if not Vault(paths()).load():
+        return [
+            Check(
+                "live selftest",
+                False,
+                "no stored session",
+                "Run `musebird login`, then `musebird doctor --selftest`.",
+            )
+        ]
+
+    async def probe() -> list[Check]:
+        driver = BrowserDriver("doctor-selftest")
+        out: list[Check] = []
+        try:
+            state = await driver.ensure_session()
+            out.append(
+                Check("live session", state.valid, state.detail,
+                      "Run `musebird login`.")
+            )
+            if not state.valid:
+                return out
+            try:
+                vm = await driver.wake_vm()
+                out.append(
+                    Check("sandbox VM awake", vm == "running", vm,
+                          "Open an app.muse thread once, then retry.")
+                )
+            except Exception as exc:
+                out.append(Check("sandbox VM awake", False, type(exc).__name__,
+                                 "Open an app.muse thread once, then retry."))
+            try:
+                badge = await driver.read_quota()
+                detail = f"{badge.used}% of {badge.limit}" if badge.used is not None else "unparsed"
+                out.append(
+                    Check("quota readable", badge.used is not None, detail,
+                          "Muse's Usage dialog changed; update parse_usage_text.")
+                )
+            except Exception as exc:
+                out.append(Check("quota readable", False, type(exc).__name__,
+                                 "Update the usage selectors in upstream/muse.py."))
+            for item in await driver.selftest():
+                out.append(
+                    Check(f"selector {item['check']}", bool(item["ok"]), str(item["detail"]),
+                          "Update the selector in src/musebird/upstream/muse.py.")
+                )
+        finally:
+            await driver.close()
+        return out
+
+    try:
+        return asyncio.run(probe())
+    except Exception as exc:
+        return [Check("live selftest", False, type(exc).__name__,
+                      "Run `MUSEBIRD_LIVE=1 pytest tests/test_live.py -s` for detail.")]
 
 
 def _module_importable() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("musebird") is not None
+
+
+def _ensure_browser(*, dry_run: bool, report: InstallReport) -> bool:
+    """One command must produce a working browser: download Chromium if needed.
+
+    Preference is a system Chrome/Edge (no download). Only when none exists do we
+    fetch Playwright's Chromium, which the spec allows as the fallback.
+    """
+    from musebird.browsers import (
+        describe,
+        find_system_browser,
+        playwright_bundle_present,
+    )
+
+    channel, executable = find_system_browser()
+    if channel or executable:
+        report.notes.append(f"browser: {describe()} (no download needed)")
+        return True
+    if playwright_bundle_present():
+        report.notes.append("browser: playwright bundled chromium")
+        return True
+    if dry_run:
+        report.notes.append("browser: would download Playwright Chromium (none found)")
+        return False
+    report.notes.append("browser: downloading Playwright Chromium (no system Chrome/Edge found)")
+    import shutil
+    import subprocess
+
+    playwright = shutil.which("playwright")
+    cmd = [playwright, "install", "chromium"] if playwright else None
+    if cmd is None:
+        return False
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        report.warnings.append(
+            f"could not download Chromium ({exc}); install Chrome/Edge and re-run `musebird doctor`"
+        )
+        return False
+    if proc.returncode != 0:
+        report.warnings.append(
+            "Playwright Chromium download failed; install Chrome/Edge, or run "
+            "`playwright install chromium` manually."
+        )
+        return False
+    report.notes.append("browser: chromium downloaded")
+    return True
 
 
 def _browser_check() -> tuple[bool, str]:

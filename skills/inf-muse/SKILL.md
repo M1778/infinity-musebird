@@ -73,3 +73,9 @@ Then:
 - Do not cancel a job without the user's say-so.
 - Do not start a second job to "redo" work unless the user asks.
 - One job per user request unless they ask for more.
+
+- **Every job runs in a Muse side chat, never the main chat.** The server enforces
+  this and returns `upstream_error` ("refusing to run in the main chat") if it cannot
+  open one. Do not work around it, do not tell the user to paste the task into Muse
+  directly, and do not retry in a loop — report the error and point at
+  `musebird doctor --selftest`.

@@ -92,3 +92,55 @@ async def test_cancel_flag_stops_a_running_job(tmp_path, project, sandbox_home):
     final = reg.get(job.id)
     assert final.state == st.CANCELLED
     assert not final.landing_dir  # nothing lands for a cancelled job
+
+
+async def test_multiline_answer_is_relayed_unquoted(tmp_path, project, sandbox_home):
+    """Answers are stored as JSON lines; the driver must receive the raw text."""
+    import json as _json
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    driver = RecordingDriver(job.id)
+    (sandbox_home.jobs / f"{job.id}.messages.jsonl").write_text(
+        _json.dumps("line one\nline two") + "\n"
+    )
+    await Worker(job.id, registry=reg, driver=driver, poll=0.01).run()
+    assert any(text == "line one\nline two" for text, _ in driver.sent), driver.sent
+
+
+async def test_blank_message_does_not_block_later_ones(tmp_path, project, sandbox_home):
+    import json as _json
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    driver = RecordingDriver(job.id)
+    (sandbox_home.jobs / f"{job.id}.messages.jsonl").write_text(
+        "\n" + _json.dumps("after blank") + "\n"
+    )
+    await Worker(job.id, registry=reg, driver=driver, poll=0.01).run()
+    assert any(text == "after blank" for text, _ in driver.sent)
+
+
+async def test_quota_is_cached_after_a_job(tmp_path, project, sandbox_home):
+    from musebird.session.keepalive import QuotaCache
+
+    QuotaCache(sandbox_home).put({"weekly_used_pct": 99})  # stale entry gets replaced
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    await Worker(job.id, registry=reg, driver=MockDriver(job.id), poll=0.01).run()
+    cached = QuotaCache(sandbox_home).get()
+    assert cached is not None
+    assert cached["used"] == 12.0
+    assert cached["remaining_ratio"] == 0.88
+
+
+def test_cancelling_a_paused_job_terminates_it(sandbox_home, project):
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    reg.update(job.id, state=st.WAKING)
+    reg.update(job.id, state=st.RUNNING)
+    reg.update(job.id, state=st.NEEDS_INPUT, pending_question="?")
+    reg.request_cancel(job.id)
+    final = reg.get(job.id)
+    assert final.state == st.CANCELLED
+    assert not reg.cancel_requested(job.id)

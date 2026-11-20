@@ -71,6 +71,7 @@ class Worker:
             self.registry.append_event(job.id, f"VM: {vm}")
             self._check_cancel()
             quota_before = await driver.read_quota()
+            self._cache_quota(quota_before)
             self.registry.update(job.id, state=st.RUNNING, quota_before=quota_before.to_dict())
             thread = await self._resume_or_open(driver)
             if not self._sent:
@@ -166,8 +167,17 @@ class Worker:
         lines = pending.read_text(encoding="utf-8", errors="replace").splitlines()
         new = lines[self.sent_messages :]
         for line in new:
-            text = line.strip()
-            if not text:
+            if not line.strip():
+                self.sent_messages += 1
+                self.registry.update(self.job_id, messages_sent=self.sent_messages)
+                continue
+            try:
+                text = json.loads(line)
+            except json.JSONDecodeError:
+                text = line
+            if not isinstance(text, str) or not text.strip():
+                self.sent_messages += 1
+                self.registry.update(self.job_id, messages_sent=self.sent_messages)
                 continue
             # send is async; keep the task referenced so it cannot be GC'd mid-flight
             self._pending_sends.append(asyncio.ensure_future(driver.send(thread, text, None)))
@@ -212,9 +222,21 @@ class Worker:
             return self.registry.get(job.id)
         entries = manifest.load(found)
         result = manifest.verify(found.parent, entries)
+        unlisted = manifest.find_unlisted(found.parent, entries)
         # `out/` is the workspace root Muse was told to use; its *contents* are what
         # lands in the project, so the manifest's directory is the review root.
         source = found.parent
+        if unlisted:
+            self.registry.append_event(
+                self.job_id, f"files not in manifest: {unlisted}", kind="error"
+            )
+            self.registry.update(
+                job.id, state=st.FAILED,
+                error="files present that the manifest does not list",
+                error_code="manifest_error", landing_dir=str(source),
+            )
+            self.audit.write("job_failed", job=job.id, code="manifest_error")
+            return self.registry.get(job.id)
         self.registry.update(job.id, quota_after=(await self._safe_quota(driver)))
         if not result.ok:
             self.registry.append_event(job.id, f"manifest mismatch: {result.mismatched}", kind="error")
@@ -244,9 +266,20 @@ class Worker:
 
     async def _safe_quota(self, driver: MuseDriver) -> dict | None:
         try:
-            return (await driver.read_quota()).to_dict()
+            quota = await driver.read_quota()
+            self._cache_quota(quota)
+            return quota.to_dict()
         except Exception:
             return None
+
+    def _cache_quota(self, quota) -> None:
+        """Persist the snapshot: `muse_status` and fan-out sizing both read it."""
+        try:
+            from musebird.session.keepalive import QuotaCache
+
+            QuotaCache(self.paths).put(quota.to_dict())
+        except Exception:
+            pass
 
 
 async def run_job(job_id: str, *, driver: MuseDriver | None = None, poll: float = POLL_INTERVAL) -> Job:

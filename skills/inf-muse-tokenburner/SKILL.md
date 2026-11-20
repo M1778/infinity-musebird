@@ -64,3 +64,9 @@ Then ask before merging, same as `/inf-muse`.
 - Never raise `agents` above the user's confirmed number.
 - Never start a fan-out job without the quota warning.
 - Never merge or execute returned code without explicit approval.
+
+- **Every job runs in a Muse side chat, never the main chat.** The server enforces
+  this and returns `upstream_error` ("refusing to run in the main chat") if it cannot
+  open one. Do not work around it, do not tell the user to paste the task into Muse
+  directly, and do not retry in a loop — report the error and point at
+  `musebird doctor --selftest`.

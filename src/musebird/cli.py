@@ -62,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("job-run", help="internal: worker for one job")
     run.add_argument("job_id")
 
+    sub.add_parser("version", help="print the installed version")
     sub.add_parser("mcp", help="run the MCP stdio server (harnesses launch this)")
     return p
 
@@ -109,6 +110,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         from musebird.jobs.worker import main as worker_main
 
         return worker_main(args.job_id)
+    if args.command == "version":
+        print(f"musebird {__version__}")
+        return 0
     if args.command == "mcp":
         from musebird.mcp_server import main as mcp_main
 
@@ -194,7 +198,11 @@ def _status(args: argparse.Namespace) -> int:
     if summary.get("account"):
         print(f"account: {summary['account']}")
     if quota:
-        print(f"quota: {quota.get('weekly_used_pct')}% used, resets {quota.get('resets_at') or 'unknown'}")
+        used = quota.get("used")
+        limit = quota.get("limit")
+        resets = quota.get("resets_at") or "unknown"
+        pct = f"{used}/{limit}" if used is not None and limit else "unknown"
+        print(f"quota: {pct} used, resets {resets}")
     else:
         print("quota: unknown (run a job or `musebird status --json` after login)")
     if jobs:

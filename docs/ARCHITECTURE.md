@@ -45,6 +45,14 @@ to the same Muse conversation instead of starting over.
 The state machine is in `jobs/state.py` and refuses backward transitions. Only the
 worker decides when a running job stops; `muse_job_cancel` writes a flag file.
 
+## Side-chat isolation (hard invariant)
+
+Every job runs in its own Muse **side chat**. The driver opens a fresh thread, uses
+the side-chat control, and then verifies Muse marks the thread as a side chat before
+typing anything. If that check fails it raises rather than writing into the account's
+main conversation, so a Muse UI change breaks jobs loudly instead of silently
+polluting the user's main chat. Resuming a saved job re-checks the same marker.
+
 ## Prompt contract
 
 Every job's prompt is the user's task plus `prompts/contract.md`, which tells Muse to
