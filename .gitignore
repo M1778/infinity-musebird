@@ -33,3 +33,6 @@ Thumbs.db
 # project artifacts
 PLAN.local.md
 *.log
+
+# workspace-only agent instructions (not part of the published package)
+/AGENTS.md
