@@ -201,8 +201,7 @@ async def muse_job_start(
             project=str(project_path),
             upload_paths=uploads,
         )
-        if driver != "mock":
-            spawn(job.id)
+        spawn(job.id)
         AuditLog().write(
             "job_created", job=job.id, mode=mode, agents=agents, uploads=len(uploads),
             approved_now=approved_new,
@@ -366,9 +365,16 @@ async def muse_files_push(job_id: str, paths_in: list[str], confirm: bool = Fals
                  "message": "Confirm these files before upload.",
                  "files": [str(p.relative_to(project)) for p in keep]}, indent=2
             )
-        _Audit().write("files_pushed", job=job_id, files=[p.name for p in keep])
+        if st.is_terminal(job.state):
+            raise MuseBirdError(f"job is already {job.state}")
+        # The worker owns the browser, so it performs the attach. Queue the paths and
+        # let it pick them up on the next poll; nothing is uploaded by this process.
+        queue = paths().jobs / f"{job_id}.uploads.jsonl"
+        with open(queue, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps([str(p) for p in keep]) + "\n")
+        _Audit().write("files_queued", job=job_id, files=[p.name for p in keep])
         return _ok(
-            f"{len(keep)} file(s) approved for upload; reopen the job to attach them.",
+            f"{len(keep)} file(s) queued for upload to job {job_id}.",
             job_id=job_id,
             files=[str(p.relative_to(project)) for p in keep],
         )

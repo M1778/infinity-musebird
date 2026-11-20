@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -70,11 +71,29 @@ async def test_mcp_tools_end_to_end_mock(tmp_path, sandbox_home):
 
         waited = await _call(session, "muse_job_wait", {"job_id": job_id,
                                                        "timeout_seconds": 5})
-        # mock jobs are only driven by a worker; this validates the tool contract
-        assert waited["state"] in ("queued", "waking", "running", "done")
+        assert waited["ok"] is True
+
+        # mock jobs are really executed by a worker; poll until it settles
+        final = await _wait_for(session, job_id, {"done", "failed"}, 40)
+        assert final["state"] == "done", final
+        assert Path(final["landing_dir"]).is_dir()
+
+        files = await _call(session, "muse_files_list", {"job_id": job_id})
+        assert files["ok"] is True
+        assert "hello.txt" in {f["path"] for f in files["files"]}
+
+        pulled = await _call(session, "muse_files_pull", {"job_id": job_id, "branch": False})
+        assert pulled["ok"] is True
+        assert pulled["verified"] == 2
 
         events = await _call(session, "muse_job_events", {"job_id": job_id})
         assert events["ok"] is True
+        assert events["cursor"] > 0
+
+        pushed = await _call(
+            session, "muse_files_push", {"job_id": job_id, "paths_in": ["notes.md"]}
+        )
+        assert pushed["ok"] is False and pushed["error"] == "approval_required"
 
         cancelled = await _call(session, "muse_job_cancel", {"job_id": job_id})
         assert cancelled["ok"] is True
@@ -112,3 +131,14 @@ async def test_mcp_unknown_job_is_clean_error(sandbox_home):
         result = await _call(session, "muse_job_status", {"job_id": "job_nope"})
         assert result["ok"] is False
         assert result["error"] == "job_not_found"
+
+
+async def _wait_for(session: ClientSession, job_id: str, states: set[str], seconds: int) -> dict:
+    deadline = asyncio.get_running_loop().time() + seconds
+    last: dict = {}
+    while asyncio.get_running_loop().time() < deadline:
+        last = await _call(session, "muse_job_status", {"job_id": job_id})
+        if last.get("state") in states:
+            return last
+        await asyncio.sleep(0.3)
+    return last

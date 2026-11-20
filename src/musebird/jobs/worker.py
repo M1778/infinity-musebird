@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from pathlib import Path
 
@@ -46,6 +47,7 @@ class Worker:
         self.poll = poll
         self.audit = AuditLog(self.paths)
         self.sent_messages = 0
+        self.sent_uploads = 0
         self._pending_sends: list[asyncio.Task[None]] = []
         self._sent = False
 
@@ -121,6 +123,7 @@ class Worker:
         while True:
             self._check_cancel()
             self._flush_user_messages(driver, thread)
+            self._flush_uploads(driver, thread)
             events, cursor = await driver.stream_events(thread, cursor)
             for event in events:
                 last_activity = time.time()
@@ -164,6 +167,24 @@ class Worker:
             self._pending_sends.append(asyncio.ensure_future(driver.send(thread, text, None)))
             self.sent_messages += 1
             self.registry.append_event(self.job_id, "steering message sent", kind="info")
+
+    def _flush_uploads(self, driver: MuseDriver, thread: ThreadRef) -> None:
+        queue = self.paths.jobs / f"{self.job_id}.uploads.jsonl"
+        if not queue.exists():
+            return
+        lines = [line for line in queue.read_text(encoding="utf-8").splitlines() if line.strip()]
+        new = lines[self.sent_uploads :]
+        for line in new:
+            try:
+                files = json.loads(line)
+            except json.JSONDecodeError:
+                self.sent_uploads += 1
+                continue
+            self._pending_sends.append(asyncio.ensure_future(driver.send(thread, "", files)))
+            self.sent_uploads += 1
+            self.registry.append_event(
+                self.job_id, f"attached {len(files)} file(s)", kind="info"
+            )
 
     async def _land(self, driver: MuseDriver, thread: ThreadRef) -> Job:
         job = self.registry.get(self.job_id)
