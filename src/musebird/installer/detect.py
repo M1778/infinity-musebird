@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,8 +33,12 @@ def user_home() -> Path:
 
 
 def _config_home() -> Path:
-    if sys.platform == "win32":
-        return Path(os.environ.get("APPDATA") or user_home() / "AppData" / "Roaming")
+    """OpenCode's config root on every platform.
+
+    Its docs specify `~/.config/opencode` (or `$XDG_CONFIG_HOME/opencode`) without a
+    Windows exception, and `opencode mcp add --global` writes there on Windows too.
+    Honouring XDG_CONFIG_HOME first also makes the location overridable in tests.
+    """
     return Path(os.environ.get("XDG_CONFIG_HOME") or user_home() / ".config")
 
 

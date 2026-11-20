@@ -19,20 +19,27 @@ ACCOUNT = "muse-session"
 MAGIC = b"MUSEBIRD1"
 
 
-class Vault:
-    def __init__(self, paths_: Paths | None = None) -> None:
-        self.paths = paths_ or paths()
-        self._keyring = None
-        try:
-            import keyring  # type: ignore[import-not-found]
-            from keyring.backends.fail import Keyring as FailKeyring
+def _usable_keyring():
+    """Return the keyring module only if it can actually store a secret.
 
-            # Importing keyring is not enough: headless Linux and containers get the
-            # "fail" backend, which reports as keyring but cannot store anything.
-            if not isinstance(keyring.get_keyring(), FailKeyring):
-                self._keyring = keyring
-        except Exception:
-            self._keyring = None
+    Importing keyring is not enough: headless Linux and containers get the "fail"
+    backend, which passes isinstance checks and raises on use.
+    """
+    try:
+        import keyring  # type: ignore[import-not-found]
+        from keyring.backends.fail import Keyring as FailKeyring
+
+        if isinstance(keyring.get_keyring(), FailKeyring):
+            return None
+        return keyring
+    except Exception:
+        return None
+
+
+class Vault:
+    def __init__(self, paths_: Paths | None = None, *, keyring_module=None) -> None:
+        self.paths = paths_ or paths()
+        self._keyring = keyring_module if keyring_module is not None else _usable_keyring()
 
     @property
     def backend(self) -> str:
