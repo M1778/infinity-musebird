@@ -101,6 +101,33 @@ musebird update                       # refresh skills and config after an upgra
 If a job asks a question, the job state becomes `needs_input` and your harness asks
 you. Nothing auto-approves anything.
 
+## Verified against a real account
+
+Everything below was exercised live on 2026-11-21, not inferred:
+
+- `musebird login` captures a session and `musebird doctor --selftest` is all green.
+- A job opens a side chat, sends the prompt, waits for the sentinel, downloads the
+  files Muse attached, verifies their sha256, and commits them to a review branch. A
+  full run landed exactly `final.txt` with the requested content, no stale files, and
+  an untouched working tree.
+- Quota reads correctly (plan, percentage, reset date) and the VM wake is acknowledged.
+
+File retrieval works through Muse's file-card editor: there is no sandbox file API,
+and the attachment's static icon is not the file. `docs/HARNESS_NOTES.md` records the
+exact selectors and endpoints, with the dates they were verified.
+
+Known limits: sandbox `git push` is unverified because Muse gates egress, so bundle
+download is the supported sync path. Muse's UI can change at any time; when a selector
+breaks, `musebird doctor --selftest` names it and `src/musebird/upstream/muse.py` is
+the only file to edit.
+
+Re-verify any time:
+
+```bash
+musebird doctor --selftest
+MUSEBIRD_LIVE=1 .venv/bin/python -m pytest tests/test_live.py -v -s
+```
+
 ## Reviewing results
 
 ```bash

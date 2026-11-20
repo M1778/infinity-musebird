@@ -25,7 +25,15 @@ Verified **2026-11-20** against the live site and
 | Downloads | Attachments are `blob:` URLs valid only inside the document, so download must be an in-page `fetch()` |
 | Approvals | Muse shows inline approval cards (e.g. publishing a public link). muse2api denies them by default; we do the same, and log it. |
 | Official API | **None for the Muse agent.** `dev.meta.ai` is the Meta Model API (models, not the agent) and `Muse Code` is a separate terminal product. |
-| Sandbox git push | **Unverified.** Sentinel gates egress, no confirmation that `git push` works. Do not depend on it: bundle download is the primary sync path. |
+| Sandbox internet | **Verified (egress only).** From the sandbox, `curl https://github.com` → 200 and `git ls-remote https://github.com/git/git HEAD` returned a real SHA. |
+| Sandbox git push | **Unverified** (credentials never tested). Bundle download is the supported sync path. |
+| Sandbox persistence | **Shared across jobs.** `/workspace/out` survives between side chats, so the prompt contract deletes it before starting; a fresh job otherwise lands the previous job's files. |
+| File retrieval | **Verified.** An agent-produced file renders as `hatch-chat-file-card-<hex(utf8(path))>` — a span with `role=button` and a static icon, no href or download attribute. Clicking opens `hatch-file-editor`; `hatch-file-editor-unsupported-download` (or the more-actions "Download" menuitem for text) fires a real Playwright download event. Fetching the icon or a `blob:` URL does **not** work for files. |
+| Sandbox file API | **Does not exist.** `/api/hatch/vm/{id}/files`, `/api/files`, `/api/library`, `/api/artifacts` and ~10 similar guesses all return `200 text/html` — the Next.js SPA, a soft-404. Check `content-type` before trusting a 200. |
+| VM wake | `POST /api/hatch/vm/wake` needs a `User-Agent` **and** all three `Sec-Fetch-*` headers or it answers 403; the body must be a JSON **string** (`data=` form-encodes, Muse replies 400 "Invalid retry_count"). A 200 `{"status":"wake_requested"}` is the success signal: `vm_state` stays `UNKNOWN` for a cold sandbox and `RUNNING` may never appear. |
+| Quota | **Verified.** Dock (`hatch-dock-more`) → Settings menuitem → a `[role=dialog]` whose text contains "Usage". The panel paints nav first (no numbers) then content, so wait for a `%`. Live text yielded plan `Free`, `0% used`, `resets on Nov 27`, `1B tokens left`. No usage JSON endpoint exists. |
+| Side chat | `/thread/new` **is** a side chat (the header shows "Back to main chat"). Markers: `button[aria-label*="Back to main chat"]`, `hatch-side-chats-panel-shell`, `[data-testid*="side-chat"]`. |
+| Send | Muse's composer has **no send button**. Enter submits, the composer clears, and the URL becomes `/thread/<uuid>` a few seconds later. |
 | Subagents | Consumer Muse has side chats and parallel tasks but no documented subagent syntax. Fan-out is therefore a **prompt contract** ("decompose, run N agents, cross-review, merge"), not an API feature. |
 | Side chat | Use regardless of user preference: every job runs in a side chat so the main conversation is untouched. The control is a UI element, so `SIDE_CHAT_BUTTON` / `side_chat_marker` are selectors that `selftest` reports on. |
 
