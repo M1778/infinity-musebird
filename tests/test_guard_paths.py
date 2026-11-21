@@ -73,3 +73,28 @@ def test_safe_member(proj):
     for bad in ("../x", "/abs", "a/../../x", "C:/x"):
         with pytest.raises(GuardViolation):
             safe_member(proj, bad)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../x",
+        "..\\x",
+        "a/../../x",
+        "a\\..\\..\\x",
+        "/abs",
+        "\\abs",
+        "C:/Windows/evil.dll",
+        "C:\\Windows\\evil.dll",
+        "\\\\server\\share\\x",
+    ],
+)
+def test_safe_member_blocks_every_separator_variant(proj, bad):
+    """Archive members may use either separator; both must be rejected."""
+    with pytest.raises(GuardViolation):
+        safe_member(proj, bad)
+
+
+def test_safe_member_allows_normal_nested_paths(proj):
+    assert safe_member(proj, "a/b.txt") == (proj / "a" / "b.txt").resolve()
+    assert safe_member(proj, "./a/b.txt") == (proj / "a" / "b.txt").resolve()

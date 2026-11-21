@@ -165,3 +165,13 @@ def test_bundle_and_duplicate_manifest_are_not_unlisted(tmp_path):
     assert manifest.find_unlisted(
         tmp_path, entries, known_extra={"out.tar.gz"}
     ) == ["sneaky.sh"]
+
+
+@pytest.mark.parametrize(
+    "bad", ["..\\evil", "a\\..\\..\\evil", "C:\\Windows\\evil", "\\\\srv\\share\\x"]
+)
+def test_manifest_rejects_windows_separator_traversal(tmp_path, bad):
+    path = tmp_path / "MANIFEST.json"
+    path.write_text(json.dumps({"files": [{"path": bad, "sha256": "", "size": 0}]}))
+    with pytest.raises(ManifestError):
+        manifest.load(path)

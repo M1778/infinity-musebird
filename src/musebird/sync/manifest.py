@@ -51,7 +51,14 @@ def load(path: Path) -> list[Entry]:
         rel = str(item["path"]).replace("\\", "/")
         while rel.startswith("./"):
             rel = rel[2:]
-        if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        # Normalise both separators: a manifest written on Windows may use `..\\`.
+        parts = [part for part in rel.split("/") if part not in ("", ".")]
+        if (
+            not parts
+            or rel.startswith("/")
+            or ".." in parts
+            or ":" in parts[0]  # drive letter
+        ):
             raise ManifestError(f"unsafe manifest path: {rel!r}")
         entries.append(
             Entry(

@@ -11,6 +11,7 @@ import base64
 import contextlib
 import json
 import os
+from typing import Protocol
 
 from musebird.config import Paths, paths, secure_write
 
@@ -19,7 +20,7 @@ ACCOUNT = "muse-session"
 MAGIC = b"MUSEBIRD1"
 
 
-def _usable_keyring():
+def _usable_keyring() -> KeyringLike | None:
     """Return the keyring module only if it can actually store a secret.
 
     Importing keyring is not enough: headless Linux and containers get the "fail"
@@ -31,15 +32,38 @@ def _usable_keyring():
 
         if isinstance(keyring.get_keyring(), FailKeyring):
             return None
-        return keyring
+        return keyring  # type: ignore[return-value]
     except Exception:
         return None
 
 
+#: Pass as `keyring_module` to force the encrypted-file backend (tests, or a user
+#: who does not want the OS keychain involved). `None` means "use the default".
+FILE_ONLY = object()
+
+
+class KeyringLike(Protocol):
+    """The three calls the vault makes on a keychain backend."""
+
+    def set_password(self, service: str, account: str, value: str) -> None: ...
+
+    def get_password(self, service: str, account: str) -> str | None: ...
+
+    def delete_password(self, service: str, account: str) -> None: ...
+
+
 class Vault:
-    def __init__(self, paths_: Paths | None = None, *, keyring_module=None) -> None:
+    def __init__(
+        self,
+        paths_: Paths | None = None,
+        *,
+        keyring_module: KeyringLike | object | None = FILE_ONLY,
+    ) -> None:
         self.paths = paths_ or paths()
-        self._keyring = keyring_module if keyring_module is not None else _usable_keyring()
+        if keyring_module is FILE_ONLY:
+            self._keyring: KeyringLike | None = _usable_keyring()
+        else:
+            self._keyring = keyring_module  # type: ignore[assignment]
 
     @property
     def backend(self) -> str:

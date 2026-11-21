@@ -77,8 +77,19 @@ def _account(f: Path, total: int, count: int, caps: Caps) -> tuple[int, int]:
 
 
 def safe_member(dest: Path, member: str) -> Path:
-    """Validate a tar/zip member path before extraction."""
-    if member.startswith(("/", "\\")) or ".." in Path(member).parts or ":" in member.split("/")[0]:
+    """Validate a tar/zip member path before extraction.
+
+    Archive members can use either separator regardless of the host OS, so both are
+    normalised before the traversal check: `..\\escape` is a traversal on Windows
+    even though `Path` on POSIX sees it as one filename.
+    """
+    normalised = member.replace("\\", "/")
+    parts = [p for p in normalised.split("/") if p not in ("", ".")]
+    if (
+        normalised.startswith("/")
+        or ".." in parts
+        or (parts and ":" in parts[0])  # drive letter, e.g. C:/...
+    ):
         raise GuardViolation(f"unsafe archive member: {member}")
     target = (dest / member).resolve()
     dest = dest.resolve()

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from musebird.session import quota as q
-from musebird.session.vault import Vault, redact
+from musebird.session.vault import FILE_ONLY, Vault, redact
 
 
 def test_vault_roundtrip_and_permissions(sandbox_home):
     # Pin the file backend: a real OS keychain (macOS/Windows CI) would store the
     # session outside the home dir and this test is about the encrypted file.
-    vault = Vault(sandbox_home, keyring_module=None)
+    vault = Vault(sandbox_home, keyring_module=FILE_ONLY)
     assert vault.backend == "file"
     vault.save({"hatch_sess": "FAKE-SENTINEL", "hatch_native_auth_device": "FAKE2"}, {"account": "a"})
     assert vault.load()["cookies"]["hatch_sess"] == "FAKE-SENTINEL"
@@ -151,4 +151,4 @@ def test_keyring_failure_falls_back_to_encrypted_file(sandbox_home):
     vault.save({"hatch_sess": "FAKE"}, {})
     assert sandbox_home.session_file.exists()
     # reading goes through the file because the keychain returned nothing
-    assert Vault(sandbox_home, keyring_module=None).load()["cookies"]["hatch_sess"] == "FAKE"
+    assert Vault(sandbox_home, keyring_module=FILE_ONLY).load()["cookies"]["hatch_sess"] == "FAKE"

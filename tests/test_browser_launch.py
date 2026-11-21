@@ -28,7 +28,7 @@ def no_system_browser(monkeypatch):
 def test_launch_options_include_headless_exactly_once(no_system_browser):
     kwargs = browser_launch_args(Path("/tmp/profile"))
     assert kwargs["headless"] is False  # login needs a visible window
-    assert kwargs["user_data_dir"] == "/tmp/profile"
+    assert kwargs["user_data_dir"] == str(Path("/tmp/profile"))
 
 
 def test_headless_is_honoured_and_not_duplicated(no_system_browser):
@@ -57,7 +57,8 @@ def test_login_never_passes_headless_itself(monkeypatch, tmp_path):
     driver that mirrors launch_persistent_context's signature catches it without a
     browser.
     """
-
+    # CI runners have no display; pretend one exists so login proceeds to launch.
+    monkeypatch.setenv("DISPLAY", ":99")
     calls: dict[str, Any] = {}
 
     class FakePage:
@@ -144,6 +145,10 @@ def test_login_refuses_without_a_display(monkeypatch):
     import sys as _sys
 
     monkeypatch.setattr(_sys, "platform", "linux")
+    import musebird.session.login as _login
+
+    # `sys.platform` is read inside `_display_available`; patch the module's view.
+    monkeypatch.setattr(_login, "_display_available", lambda: False)
 
     from musebird.errors import DriverUnavailable
     from musebird.session.login import login
