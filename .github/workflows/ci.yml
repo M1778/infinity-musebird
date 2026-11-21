@@ -32,28 +32,21 @@ jobs:
         run: uv run pyright
       - name: Build wheel
         run: uv build --wheel .
+      # Windows has historically hung somewhere in the suite. Running each file
+      # separately is the cheap diagnosis: the file that dies is named in the log.
       - name: Tests per file (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          $failed = @()
-          Get-ChildItem tests/test_*.py | ForEach-Object {
-            $name = $_.Name
-            Write-Host "--- $name ---"
-            $out = uv run pytest -q -s --timeout=45 $_.FullName 2>&1 | Out-String
-            $code = $LASTEXITCODE
-            Write-Host $out
-            if ($code -ne 0) {
-              $failed += $name
-              Write-Host "### FAILED/HUNG: $name"
-            }
-          }
-          Write-Host "==== summary ===="
-          if ($failed.Count -gt 0) {
-            Write-Host "failing files: $($failed -join ', ')"
-          } else {
-            Write-Host "all files passed"
-          }
+          set -o pipefail
+          for f in tests/test_*.py; do
+            echo "--- $f ---"
+            if timeout 120 .venv/Scripts/python.exe -m pytest -q -s --timeout=45 "$f"; then
+              echo "PASS $f"
+            else
+              echo "FAILED_OR_HUNG $f"
+            fi
+          done
 
       - name: Tests
         # -s disables output capture: with capture active, pytest-timeout dies inside
