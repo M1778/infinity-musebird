@@ -101,6 +101,24 @@ musebird update                       # refresh skills and config after an upgra
 If a job asks a question, the job state becomes `needs_input` and your harness asks
 you. Nothing auto-approves anything.
 
+## Verified in real harnesses
+
+A hardened integration test drives the **actual harness**, not just the MCP server:
+
+```bash
+./scripts/harness_test.sh          # /inf-muse and /inf-muse-tokenburner
+```
+
+It launches Claude Code with the real MCP server and the real skill, lets the model
+decide what to call, and asserts observable state afterwards: a job was created, it
+reached `done`, a review branch exists, the deliverable is **on the branch**, the
+working tree is untouched, and no deletions were staged. **22/22 assertions pass**,
+including a 3-agent fan-out where two of three cross-reviews caught real repetition
+issues that were then fixed in the merge.
+
+The same MCP server was also exercised from OpenCode (different model, tool call
+succeeded) and Codex (`musebird` registered and callable).
+
 ## Verified against a real account
 
 Everything below was exercised live on 2026-11-21, not inferred:

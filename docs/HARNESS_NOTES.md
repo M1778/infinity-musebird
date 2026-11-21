@@ -103,6 +103,19 @@ with all three harnesses ends up with the skills installed in three places. That
 intentional: each harness gets its native location, and `uninstall` removes only
 paths recorded in `install-state.json`.
 
+## What a real harness run found
+
+Verified 2026-11-21 by running Claude Code against the live MCP server
+(`scripts/harness_test.sh`). Each of these was invisible to unit tests:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Model stopped after one call | `-p` has nobody to approve a permission prompt | the harness test grants `mcp__musebird` explicitly; users see the same prompt interactively |
+| Model chose `sync=bundle` inside a git repo | the skill described the rule but did not require the check | both skills now require `git rev-parse --is-inside-work-tree` first |
+| Model wrote the deliverable itself | the skill forbade merging but not `Write` | skills forbid Write/cp/checkout of deliverables explicitly |
+| `codex mcp list` lost our entry | Codex rewrites config.toml and drops tables it did not write | the adapter uses `codex mcp add` whenever it targets the same file |
+| One job failed "session not valid" while status was healthy | Muse rotates cookies mid-session; one 401 is not proof | the worker retries the probe before asking the user to log in |
+
 ## Toolchain
 
 - Package: Python 3.10+, `uv` for install and Python provisioning.
