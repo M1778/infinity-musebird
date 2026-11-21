@@ -55,6 +55,10 @@ def clear_stale_singletons(profile: Path) -> list[str]:
 class ProfileLock:
     def __init__(self, profile: Path, *, timeout: float = 900.0, poll: float = 0.5) -> None:
         self.path = profile.parent / (profile.name + ".lock")
+        # The owner pid lives beside the lock, not inside it: on Windows the lock is
+        # a byte-range lock, and truncating the locked byte is not portable. Only the
+        # holder writes this file, after it owns the lock.
+        self.owner_path = profile.parent / (profile.name + ".lock.owner")
         self.timeout = timeout
         self.poll = poll
         self._fd: int | None = None
@@ -66,8 +70,7 @@ class ProfileLock:
         while True:
             if self._try_lock():
                 with contextlib.suppress(OSError):
-                    os.truncate(self._fd, 0)
-                    os.write(self._fd, f"{os.getpid()}\n".encode()[:32])
+                    self.owner_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
                 return self
             if time.monotonic() >= deadline:
                 os.close(self._fd)
@@ -118,6 +121,8 @@ class ProfileLock:
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
         with contextlib.suppress(OSError):
             os.close(self._fd)
+        with contextlib.suppress(OSError):
+            self.owner_path.unlink()
         self._fd = None
 
 
@@ -128,11 +133,7 @@ def force_unlock(profile: Path) -> list[str]:
     job: silently stealing a live profile would corrupt two sessions at once.
     """
     if lock_status(profile)["held"]:
-        lock = profile.parent / (profile.name + ".lock")
-        holder = None
-        with contextlib.suppress(OSError):
-            raw = lock.read_text(encoding="utf-8", errors="replace").strip()
-            holder = int(raw) if raw.isdigit() else None
+        holder = lock_status(profile)["pid"]
         if holder is not None:
             try:
                 os.kill(holder, 0)
@@ -151,11 +152,11 @@ def lock_status(profile: Path) -> dict:
     info: dict = {"path": str(lock), "exists": lock.exists(), "pid": None, "held": False}
     if not lock.exists():
         return info
-    try:
-        raw = lock.read_text(encoding="utf-8", errors="replace").strip()
+    with contextlib.suppress(OSError):
+        raw = (profile.parent / (profile.name + ".lock.owner")).read_text(
+            encoding="utf-8", errors="replace"
+        ).strip()
         info["pid"] = int(raw) if raw.isdigit() else None
-    except OSError:
-        pass
     probe = ProfileLock(profile, timeout=0.05, poll=0.01)
     try:
         probe.__enter__()

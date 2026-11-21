@@ -61,7 +61,10 @@ class Vault:
     ) -> None:
         self.paths = paths_ or paths()
         if keyring_module is FILE_ONLY:
-            self._keyring: KeyringLike | None = _usable_keyring()
+            # Explicitly file-only: never touch a system keychain.
+            self._keyring: KeyringLike | None = None
+        elif keyring_module is None:
+            self._keyring = _usable_keyring()
         else:
             self._keyring = keyring_module  # type: ignore[assignment]
 

@@ -52,3 +52,20 @@ def git_project(project: Path) -> Path:
     subprocess.run(["git", "add", "-A"], cwd=project, check=True, env=env)
     subprocess.run(["git", "commit", "-qm", "seed"], cwd=project, check=True, env=env)
     return project
+
+
+def _can_create_symlinks(tmp_path: Path) -> bool:
+    """Windows refuses symlinks without developer mode or elevation."""
+    try:
+        (tmp_path / ".probe-link").symlink_to(tmp_path / ".probe-target")
+        (tmp_path / ".probe-target").write_text("x")
+        (tmp_path / ".probe-link").unlink(missing_ok=True)
+        return True
+    except (OSError, NotImplementedError):
+        return False
+
+
+@pytest.fixture()
+def requires_symlinks(tmp_path: Path) -> None:
+    if not _can_create_symlinks(tmp_path):
+        pytest.skip("this platform/user cannot create symlinks")

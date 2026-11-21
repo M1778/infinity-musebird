@@ -110,7 +110,7 @@ def test_profile_lock_is_exclusive(tmp_path):
     third.__exit__()
 
 
-def test_stale_singleton_from_a_dead_pid_is_cleared(tmp_path):
+def test_stale_singleton_from_a_dead_pid_is_cleared(tmp_path, requires_symlinks):
     import os
 
     from musebird.browser_lock import clear_stale_singletons
@@ -124,7 +124,7 @@ def test_stale_singleton_from_a_dead_pid_is_cleared(tmp_path):
     assert not (profile / "SingletonLock").exists() or not (profile / "SingletonLock").is_symlink()
 
 
-def test_live_singleton_is_left_alone(tmp_path):
+def test_live_singleton_is_left_alone(tmp_path, requires_symlinks):
     import os
 
     from musebird.browser_lock import clear_stale_singletons
@@ -171,7 +171,7 @@ def test_force_unlock_refuses_a_live_holder(tmp_path):
         held.__exit__()
 
 
-def test_force_unlock_clears_a_dead_lock(tmp_path):
+def test_force_unlock_clears_a_dead_lock(tmp_path, requires_symlinks):
     import os
 
     from musebird.browser_lock import force_unlock
@@ -181,3 +181,43 @@ def test_force_unlock_clears_a_dead_lock(tmp_path):
     os.symlink("host-999999999", profile / "SingletonLock")
     cleared = force_unlock(profile)
     assert "SingletonLock" in cleared
+
+
+def test_lock_owner_is_written_beside_the_lock_not_inside_it(tmp_path):
+    """Windows locks a byte range; truncating that byte is not portable.
+
+    The holder's pid therefore lives in a sibling `.owner` file, written only after
+    the lock is held, and removed on release.
+    """
+    from musebird.browser_lock import ProfileLock
+
+    profile = tmp_path / "bp-owner"
+    profile.mkdir()
+    lock = ProfileLock(profile, timeout=1)
+    lock.__enter__()
+    try:
+        # The lock file itself holds no pid, so a locked byte is never rewritten.
+        assert lock.path.read_bytes() in (b"", b"\x00") or len(lock.path.read_bytes()) <= 1
+        assert lock.owner_path.read_text().strip() == str(__import__("os").getpid())
+    finally:
+        lock.__exit__()
+    assert not lock.owner_path.exists(), "the owner file must be cleaned up"
+
+
+def test_a_rejected_attempt_does_not_clear_the_holders_pid(tmp_path):
+    from musebird.browser_lock import ProfileLock, lock_status
+
+    profile = tmp_path / "bp-clear"
+    profile.mkdir()
+    held = ProfileLock(profile, timeout=1)
+    held.__enter__()
+    try:
+        contender = ProfileLock(profile, timeout=0.15, poll=0.05)
+        from musebird.errors import DriverUnavailable
+
+        with pytest.raises(DriverUnavailable):
+            contender.__enter__()
+        # The failed attempt must leave the holder identifiable.
+        assert lock_status(profile)["pid"] == __import__("os").getpid()
+    finally:
+        held.__exit__()
