@@ -51,7 +51,13 @@ jobs:
       - name: Tests
         # -v prints each test name before it runs, so a hang (or a hard kill that
         # prevents pytest-timeout from reporting) still leaves the culprit in the log.
-        run: uv run pytest -v -s --timeout=120
+        # test_side_chat.py runs first on Windows: its lock tests are the only ones
+        # that exercise OS file locking, and they must not be masked by suite order.
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            uv run pytest -v -s --timeout=120 tests/test_side_chat.py
+          fi
+          uv run pytest -v -s --timeout=120
       - name: Wheel contains every subpackage
         run: uv run pytest -q tests/test_packaging.py
   secret-scan:
