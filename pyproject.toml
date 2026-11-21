@@ -70,6 +70,8 @@ testpaths = ["tests"]
 addopts = "-q"
 # A hang must fail loudly, not stall CI until the job timeout kills it.
 timeout = 120
+# Raise inside the test thread so a hang reports the offending test by name.
+timeout_method = "thread"
 markers = ["live: requires a real Muse account (skipped in CI)"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
