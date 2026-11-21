@@ -49,6 +49,7 @@ jobs:
           done
 
       - name: Tests
+        shell: bash
         # -v prints each test name before it runs, so a hang (or a hard kill that
         # prevents pytest-timeout from reporting) still leaves the culprit in the log.
         # test_side_chat.py runs first on Windows: its lock tests are the only ones
