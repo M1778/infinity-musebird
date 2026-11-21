@@ -175,3 +175,57 @@ def test_toml_merge_is_idempotent_with_following_sections(tmp_path):
     before = cfg.read_text()
     assert merge.merge_toml_server(cfg) is False
     assert cfg.read_text() == before or cfg.read_text().strip() == before.strip()
+
+
+def test_codex_cli_is_preferred_when_it_targets_the_same_config(monkeypatch):
+    """Codex rewrites its own TOML and drops tables it did not write.
+
+    Live evidence 2026-11-21: a hand-appended [mcp_servers.musebird] vanished after
+    Codex added a plugin, while [plugins.*] survived. So the adapter must let Codex
+    write its own entry whenever the CLI targets the detected file.
+    """
+    from musebird.config import Paths
+    from musebird.installer.adapters import CodexAdapter
+    from musebird.installer.detect import Detected
+
+    tmp = Path(__import__("tempfile").mkdtemp())
+    (tmp / ".codex").mkdir()
+    cfg = tmp / ".codex" / "config.toml"
+    cfg.write_text('[plugins."x@y"]\nenabled = true\n')
+    monkeypatch.setenv("CODEX_HOME", str(tmp / ".codex"))
+
+    detected = Detected("codex", "/usr/bin/codex", tmp, cfg, True)
+    adapter = CodexAdapter(detected, Paths(tmp))
+    assert adapter._cli_targets_this_config() is True
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, timeout=60):
+        calls.append(list(cmd))
+
+        class R:
+            # `mcp get` must report "not registered" so `add` runs.
+            returncode = 1 if "get" in cmd else 0
+
+        return R()
+
+    monkeypatch.setattr("musebird.installer.adapters._run", fake_run)
+    adapter.install_mcp(dry_run=False)
+    assert any("add" in c for c in calls), f"the CLI was not used: {calls}"
+
+
+def test_codex_file_merge_when_the_cli_would_edit_another_file(monkeypatch, tmp_path):
+    from musebird.config import Paths
+    from musebird.installer.adapters import CodexAdapter
+    from musebird.installer.detect import Detected
+
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir()
+    cfg.write_text('[plugins."x@y"]\nenabled = true\n')
+    detected = Detected("codex", "/usr/bin/codex", tmp_path, cfg, True)
+    adapter = CodexAdapter(detected, Paths(tmp_path))
+    # The CLI would write the process's real ~/.codex, not this fixture.
+    assert adapter._cli_targets_this_config() is False
+    adapter.install_mcp(dry_run=False)
+    assert "[mcp_servers.musebird]" in cfg.read_text()

@@ -10,20 +10,24 @@ do not continue, quote, or reference the user's main Muse conversation.
 
 ## Workspace
 
-0. **Start clean.** If `/workspace/out/` already exists, delete it first:
-   `rm -rf /workspace/out && mkdir -p /workspace/out`. The sandbox is shared between
-   jobs, so leftover files from an earlier task must never be included in this one.
-1. Work only inside `/workspace/out/`. Never read or write outside it.
-2. Keep the project tree self-contained: all source, docs, tests and assets go under `/workspace/out/`.
+The output directory is **`out/` relative to the sandbox working directory** — Muse
+resolves `/workspace/out` to the same place, and either spelling appears in tool
+output. Use the relative form `out/` in every command.
+
+0. **Start clean.** Remove any previous output first: `rm -rf out && mkdir -p out`.
+   The sandbox is shared between jobs, so leftover files from an earlier task must
+   never be included in this one.
+1. Work only inside `out/`. Never read or write outside it.
+2. Keep the project tree self-contained: all source, docs, tests and assets go under `out/`.
 3. Do not fetch, clone or execute anything the user did not ask for.
 
 ## Fan-out mode (only when `mode=fanout`)
 
-1. First write `/workspace/out/plan.json` describing the decomposition:
+1. First write `out/plan.json` describing the decomposition:
    `{"subtasks": [{"id": "agent-1", "goal": "..."}], "merge": "how results combine"}`
-2. Run each subtask in its own directory: `/workspace/out/<agent-id>/`.
+2. Run each subtask in its own directory: `out/<agent-id>/`.
 3. Have agents cross-review each other's output, recording findings in `<agent-id>/REVIEW.md`.
-4. Merge accepted work into `/workspace/out/merged/`; keep per-agent directories intact.
+4. Merge accepted work into `out/merged/`; keep per-agent directories intact.
 
 ## Finishing
 
@@ -32,13 +36,13 @@ When the task is complete:
 0. **Attach the deliverables to your final reply.** MuseBird can only retrieve files
    that you attach to the conversation, so this step is mandatory:
 
-   - Pack the results: `cd /workspace/out && tar -czf /workspace/out.tar.gz .`
-   - **Attach `out.tar.gz` and `MANIFEST.json` to your last message** using the
+   - Pack the results: `cd out && tar -czf ../out.tar.gz .`
+   - **Attach `out.tar.gz` and `out/MANIFEST.json` to your last message** using the
      attach-file control in the composer.
    - If attaching fails, paste the manifest contents in a fenced code block and say
      clearly that the bundle could not be attached.
 
-1. Write `/workspace/out/MANIFEST.json`:
+1. Write `out/MANIFEST.json`:
 
 ```json
 {
@@ -48,7 +52,7 @@ When the task is complete:
 }
 ```
 
-   `path` is relative to `/workspace/out/`. `sha256` is the hex digest of the file bytes.
+   `path` is relative to `out/`. `sha256` is the hex digest of the file bytes.
 
 2. Print exactly this line as the last line of your reply:
 

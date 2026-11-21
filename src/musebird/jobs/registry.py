@@ -35,7 +35,6 @@ class Job:
     prompt: str
     mode: str = "single"
     agents: int = 1
-    budget: str | None = None
     sync: str = "bundle"
     driver: str = "browser"
     project: str = ""

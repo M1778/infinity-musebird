@@ -335,3 +335,42 @@ async def test_a_stalled_job_emits_heartbeats(tmp_path, project):
     _events, _ = reg.events_since(job.id, 0)
     assert final.state == st.FAILED  # went quiet without a sentinel
     assert "went quiet" in (final.error or "")
+
+
+async def test_a_transient_session_401_is_retried(tmp_path, project):
+    """Muse rotates cookies mid-session; one 401 must not demand a re-login."""
+    from musebird.drivers.base import SessionState
+
+    class FlakySession(MockDriver):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.probes = 0
+
+        async def ensure_session(self):
+            self.probes += 1
+            if self.probes == 1:
+                return SessionState(valid=False, detail="transient 401")
+            return SessionState(valid=True, detail="assigned")
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    final = await Worker(
+        job.id, registry=reg, driver=FlakySession(job.id), poll=0.01
+    ).run()
+    assert final.state == st.DONE
+
+
+async def test_a_persistent_invalid_session_still_fails(tmp_path, project):
+    from musebird.drivers.base import SessionState
+
+    class DeadSession(MockDriver):
+        async def ensure_session(self):
+            return SessionState(valid=False, detail="expired")
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    final = await Worker(
+        job.id, registry=reg, driver=DeadSession(job.id), poll=0.01
+    ).run()
+    assert final.state == st.FAILED
+    assert "session" in (final.error or "").lower()

@@ -31,8 +31,10 @@ Identical to `/inf-muse`: first-upload confirmation is required, guard findings 
 
 ## Step 3 — start
 
-Call `muse_job_start` with `mode: "fanout"` and the confirmed `agents` count. Pass `budget` if the
-user gave one.
+Call `muse_job_start` with `mode: "fanout"` and the confirmed `agents` count. Check
+`git rev-parse --is-inside-work-tree` and pass `sync: "git"` when it reports `true`, so the
+merged result lands on a review branch; use `bundle` only outside a repository. There is no
+budget parameter: if the user gave a budget, state it in the prompt so Muse sees it.
 
 ## Step 4 — poll and relay
 
@@ -70,3 +72,12 @@ Then ask before merging, same as `/inf-muse`.
   open one. Do not work around it, do not tell the user to paste the task into Muse
   directly, and do not retry in a loop — report the error and point at
   `musebird doctor --selftest`.
+
+- **Write nothing into the user's working directory.** The deliverable is whatever
+  `muse_files_pull` put on the review branch or in `.musebird/landing/`.
+  - Do **not** use `Write`, `Edit`, `cp`, `mv`, `tee`, `git checkout`, or redirection
+    to create or copy a deliverable. Not even to "show the result".
+  - To display file contents, read them (`cat`/`Read`) — never reproduce them as a
+    file in the project.
+  - Do not finish a failed job yourself. Report the failure and stop.
+  - If the user wants the files in their tree, they merge the branch. That is their call.

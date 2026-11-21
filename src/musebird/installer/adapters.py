@@ -200,7 +200,14 @@ class ClaudeAdapter(Adapter):
 
 
 class CodexAdapter(Adapter):
-    """MCP global config: [mcp_servers.musebird] in $CODEX_HOME/config.toml."""
+    """MCP global config: [mcp_servers.musebird] in $CODEX_HOME/config.toml.
+
+    Prefer Codex's own CLI whenever the binary exists. Codex rewrites config.toml
+    through a TOML serializer on unrelated operations (installing a plugin, for
+    example), and a table we appended by hand was silently dropped that way while
+    `[plugins.*]` entries survived. Letting Codex write its own entry keeps it known
+    to the app instead of looking like stray text.
+    """
 
     name = "codex"
 
@@ -210,13 +217,42 @@ class CodexAdapter(Adapter):
     def mcp_installed(self) -> bool:
         return merge.read_toml_section(self._config()) is not None
 
+    def _cli_targets_this_config(self) -> bool:
+        """True only when `codex mcp add` would edit the file we report.
+
+        Codex always writes `$CODEX_HOME/config.toml`, falling back to the process's
+        real `~/.codex`. When the detected config is elsewhere — a fixture home, or a
+        CODEX_HOME override — shelling out would silently edit a different file than
+        the one we verify, so the file merge is used instead.
+        """
+        import os
+
+        codex_home = os.environ.get("CODEX_HOME")
+        if codex_home:
+            return Path(codex_home, "config.toml").resolve() == self._config().resolve()
+        real_home = Path(os.environ.get("HOME") or Path.home())
+        return (real_home / ".codex" / "config.toml").resolve() == self._config().resolve()
+
+    def _cli_add(self) -> bool:
+        """Register via `codex mcp add`; returns True when the CLI did the work."""
+        if not self.h.binary or not self._cli_targets_this_config():
+            return False
+        existing = _run(["codex", "mcp", "get", "musebird", "--json"], timeout=30)
+        if existing is not None and existing.returncode == 0:
+            return True
+        added = _run(["codex", "mcp", "add", "musebird", "--", "musebird", "mcp"], timeout=60)
+        return added is not None and added.returncode == 0
+
     def install_mcp(self, dry_run: bool) -> list[Change]:
         cfg = self._config()
         if self.mcp_installed():
             return [Change("mcp ok", cfg, "global")]
         if dry_run:
-            return [Change("mcp add", cfg, "global, append table")]
+            return [Change("mcp add", cfg, "global, via codex mcp add")]
         backup.backup_file(cfg, self.name, self.paths)
+        if self._cli_add():
+            return [Change("mcp add", cfg, "global, via codex mcp add")]
+        # No binary: fall back to a backed-up file merge.
         changed = merge.merge_toml_server(cfg, "musebird", ["mcp"])
         return [Change("mcp add", cfg, "global") if changed else Change("mcp ok", cfg)]
 
@@ -227,7 +263,10 @@ class CodexAdapter(Adapter):
         if dry_run:
             return [Change("mcp remove", cfg)]
         backup.backup_file(cfg, self.name, self.paths)
-        merge.remove_toml_server(cfg)
+        if self._cli_targets_this_config():
+            _run(["codex", "mcp", "remove", "musebird"], timeout=60)
+        if self.mcp_installed():
+            merge.remove_toml_server(cfg)
         return [Change("mcp remove", cfg)]
 
 

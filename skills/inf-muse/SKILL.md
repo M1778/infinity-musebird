@@ -37,8 +37,11 @@ Call `muse_job_start` with:
   requirements they did not ask for.
 - `mode`: `single`
 - `upload_paths`: the approved files
-- `sync`: `git` when the project is a git repository, otherwise `bundle`
-- `budget`: only if the user named one
+- `sync`: **run `git rev-parse --is-inside-work-tree` first.** If it says `true`, pass
+  `sync: "git"` — that is what creates the review branch the user reviews and merges.
+  Only pass `sync: "bundle"` when the directory is not a git repository. Do not guess
+  and do not default to `bundle` in a repo: a bundle job leaves nothing to merge.
+- no budget parameter exists: if the user names a budget, put it in the prompt
 
 Report the `job_id` and that Muse is working.
 
@@ -79,3 +82,12 @@ Then:
   open one. Do not work around it, do not tell the user to paste the task into Muse
   directly, and do not retry in a loop — report the error and point at
   `musebird doctor --selftest`.
+
+- **Write nothing into the user's working directory.** The deliverable is whatever
+  `muse_files_pull` put on the review branch or in `.musebird/landing/`.
+  - Do **not** use `Write`, `Edit`, `cp`, `mv`, `tee`, `git checkout`, or redirection
+    to create or copy a deliverable. Not even to "show the result".
+  - To display file contents, read them (`cat`/`Read`) — never reproduce them as a
+    file in the project.
+  - Do not finish a failed job yourself. Report the failure and stop.
+  - If the user wants the files in their tree, they merge the branch. That is their call.

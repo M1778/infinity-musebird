@@ -102,3 +102,48 @@ async def test_single_job_end_to_end(tmp_path: Path):
     assert final.landing_dir
     landed = Path(final.landing_dir)
     assert (landed / "MANIFEST.json").is_file(), "Muse did not follow the manifest contract"
+
+
+@pytest.mark.asyncio
+async def test_needs_input_resumes_on_the_saved_thread(tmp_path: Path):
+    """The full question -> answer -> resume -> land loop, on a real account.
+
+    Verified live 2026-11-21: an under-specified task makes Muse emit
+    INF-MUSEBIRD-NEEDS-INPUT with a real question, so this path is reachable and
+    must not lose the job.
+    """
+
+    from musebird.jobs.registry import JobRegistry
+    from musebird.jobs.worker import Worker
+
+    assert Vault().load(), "run `musebird login` first"
+    project = tmp_path / "resume-project"
+    project.mkdir()
+    registry = JobRegistry()
+    job = registry.create(
+        prompt=(
+            "Create out/config.json for a web app. The framework and port must come "
+            "from the user, so ask before choosing them."
+        ),
+        project=str(project),
+        driver="browser",
+        sync="bundle",
+    )
+
+    first = await Worker(job.id, registry=registry, poll=2.0).run()
+    assert first.state == st.NEEDS_INPUT, f"{first.state}: {first.error}"
+    assert first.pending_question, "needs_input without a question"
+    assert first.thread_url and "/thread/" in first.thread_url
+
+    # Answer exactly as the MCP layer does, then let a fresh worker reattach.
+    path = Path(os.environ.get("MUSEBIRD_HOME") or Path.home() / ".infinity-musebird")
+    (path / "jobs" / f"{job.id}.messages.jsonl").write_text(
+        __import__("json").dumps("Use plain JSON with no framework, on port 8080.") + "\n"
+    )
+    registry.update(job.id, state=st.RUNNING, pending_question=None)
+
+    second = await Worker(job.id, registry=registry, poll=2.0).run()
+    assert second.state == st.DONE, f"{second.state}: {second.error}"
+    assert second.thread_url == first.thread_url, "resumed on a different thread"
+    lands = list(Path(second.landing_dir or project).rglob("config.json"))
+    assert lands, "the answered job produced no config.json"

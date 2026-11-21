@@ -10,8 +10,18 @@ import pytest
 from musebird.config import Paths
 
 
+def _live_mode() -> bool:
+    return os.environ.get("MUSEBIRD_LIVE") == "1"
+
+
 @pytest.fixture(autouse=True)
 def sandbox_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Paths:
+    # Live tests must see the real signed-in vault; a temp home would hide it.
+    if _live_mode():
+        real = Path(os.environ.get("MUSEBIRD_HOME") or Path.home() / ".infinity-musebird")
+        monkeypatch.setenv("MUSEBIRD_HOME", str(real))
+        monkeypatch.setenv("MUSEBIRD_HOME_TEST_USER", str(Path.home()))
+        return Paths(real)
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("MUSEBIRD_HOME", str(home))

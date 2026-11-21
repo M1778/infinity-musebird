@@ -17,7 +17,7 @@ from pathlib import Path
 from musebird.audit import AuditLog, prompt_hash
 from musebird.config import Paths, paths
 from musebird.drivers import create_driver
-from musebird.drivers.base import MuseDriver, ThreadRef
+from musebird.drivers.base import MuseDriver, SessionState, ThreadRef
 from musebird.errors import MuseBirdError, UpstreamError
 from musebird.guard.paths import Caps
 from musebird.jobs import state as st
@@ -66,9 +66,11 @@ class Worker:
 
         driver.set_progress_hook(_progress)
         try:
-            session = await driver.ensure_session()
+            session = await self._session_with_retry(driver)
             if not session.valid:
-                raise MuseBirdError("Muse session is not valid", hint="Run `musebird login`.")
+                raise MuseBirdError(
+                    "Muse session is not valid", hint="Run `musebird login`."
+                )
             # A resumed job (answered question) is already RUNNING; only a fresh
             # job moves through WAKING.
             if self.registry.get(job.id).state == st.QUEUED:
@@ -112,6 +114,27 @@ class Worker:
         return self.registry.get(job.id)
 
     # -- internals -------------------------------------------------------
+    async def _session_with_retry(self, driver: MuseDriver) -> SessionState:
+        """Check the session, tolerating Muse's mid-session cookie rotation.
+
+        Live evidence 2026-11-21: one job failed with "Muse session is not valid"
+        while `musebird status` immediately before and after reported a healthy
+        session. Muse rotates cookies during a session, so a single 401 is not proof
+        the user must log in again. Retry briefly before telling them to.
+        """
+        last = SessionState(valid=False, detail="never probed")
+        for attempt in range(3):
+            last = await driver.ensure_session()
+            if last.valid:
+                return last
+            if attempt < 2:
+                self.registry.append_event(
+                    self.job_id,
+                    f"session probe not ready (attempt {attempt + 1}); retrying",
+                )
+                await asyncio.sleep(3.0)
+        return last
+
     def _fail(self, job: Job, message: str, code: str) -> None:
         state = self.registry.get(job.id).state
         if st.is_terminal(state):

@@ -52,6 +52,8 @@ def claude() -> Detected:
 
 
 def codex() -> Detected:
+    # `home` is the *test-user* home so fixtures can redirect detection; adapters
+    # must never mix this with the process's real HOME.
     home = user_home()
     codex_home = Path(os.environ.get("CODEX_HOME") or home / ".codex")
     binary = shutil.which("codex")
