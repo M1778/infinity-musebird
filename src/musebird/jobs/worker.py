@@ -28,6 +28,9 @@ from musebird.upstream import muse
 
 POLL_INTERVAL = 2.0
 IDLE_TIMEOUT = 60 * 45
+#: Delay between session probes. One transient 401 during Muse's cookie rotation is
+#: not proof the user must log in again, so the probe is retried before failing.
+SESSION_RETRY_S = 3.0
 
 
 class Worker:
@@ -132,7 +135,7 @@ class Worker:
                     self.job_id,
                     f"session probe not ready (attempt {attempt + 1}); retrying",
                 )
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(SESSION_RETRY_S)
         return last
 
     def _fail(self, job: Job, message: str, code: str) -> None:

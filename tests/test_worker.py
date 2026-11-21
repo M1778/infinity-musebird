@@ -337,7 +337,7 @@ async def test_a_stalled_job_emits_heartbeats(tmp_path, project):
     assert "went quiet" in (final.error or "")
 
 
-async def test_a_transient_session_401_is_retried(tmp_path, project):
+async def test_a_transient_session_401_is_retried(tmp_path, project, monkeypatch):
     """Muse rotates cookies mid-session; one 401 must not demand a re-login."""
     from musebird.drivers.base import SessionState
 
@@ -352,6 +352,9 @@ async def test_a_transient_session_401_is_retried(tmp_path, project):
                 return SessionState(valid=False, detail="transient 401")
             return SessionState(valid=True, detail="assigned")
 
+    import musebird.jobs.worker as worker_module
+
+    monkeypatch.setattr(worker_module, "SESSION_RETRY_S", 0.01)
     reg = JobRegistry()
     job = reg.create(prompt="x", project=str(project), driver="mock")
     final = await Worker(
@@ -360,13 +363,16 @@ async def test_a_transient_session_401_is_retried(tmp_path, project):
     assert final.state == st.DONE
 
 
-async def test_a_persistent_invalid_session_still_fails(tmp_path, project):
+async def test_a_persistent_invalid_session_still_fails(tmp_path, project, monkeypatch):
     from musebird.drivers.base import SessionState
 
     class DeadSession(MockDriver):
         async def ensure_session(self):
             return SessionState(valid=False, detail="expired")
 
+    import musebird.jobs.worker as worker_module
+
+    monkeypatch.setattr(worker_module, "SESSION_RETRY_S", 0.01)
     reg = JobRegistry()
     job = reg.create(prompt="x", project=str(project), driver="mock")
     final = await Worker(

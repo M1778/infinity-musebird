@@ -18,6 +18,12 @@ from musebird.drivers.browser.driver import BrowserDriver
 from musebird.upstream import muse
 
 
+@pytest.fixture(autouse=True)
+def _no_wake_wait(monkeypatch):
+    """Skip the post-wake confirmation window; it is wall-clock, not logic."""
+    monkeypatch.setattr(muse, "VM_WAKE_CONFIRM_S", 0)
+
+
 def test_wake_headers_are_complete():
     for header in ("Origin", "Referer", "Accept", "Sec-Fetch-Site", "Sec-Fetch-Mode",
                    "Sec-Fetch-Dest"):
