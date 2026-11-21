@@ -20,12 +20,22 @@ ACCOUNT = "muse-session"
 MAGIC = b"MUSEBIRD1"
 
 
+#: Set this to skip keyring entirely. Tests set it so no run can ever touch the host
+#: keychain: importing keyring on Windows probes the Credential Manager, which has
+#: deadlocked CI, and a test has no business reading the developer's real secrets.
+ENV_DISABLE_KEYRING = "MUSEBIRD_DISABLE_KEYRING"
+
+
 def _usable_keyring() -> KeyringLike | None:
     """Return the keyring module only if it can actually store a secret.
 
     Importing keyring is not enough: headless Linux and containers get the "fail"
     backend, which passes isinstance checks and raises on use.
     """
+    import os
+
+    if os.environ.get(ENV_DISABLE_KEYRING) == "1":
+        return None
     try:
         import keyring  # type: ignore[import-not-found]
         from keyring.backends.fail import Keyring as FailKeyring

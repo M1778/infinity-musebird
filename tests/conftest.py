@@ -12,6 +12,9 @@ import pytest
 # must not read or write the developer's real secrets. This is read by keyring at
 # import time, so it has to be set before musebird imports it.
 os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+# Belt and braces: musebird itself refuses to import keyring when this is set, so a
+# test cannot reach the host keychain even if keyring ignores the backend override.
+os.environ["MUSEBIRD_DISABLE_KEYRING"] = "1"
 
 from musebird.config import Paths
 
