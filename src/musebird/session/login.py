@@ -7,6 +7,7 @@ left alone; nothing is ever printed except cookie *names*.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,7 +90,9 @@ async def login(*, paths_: Paths | None = None, timeout: int = LOGIN_TIMEOUT_S,
 
     # Held synchronously around the async block: the lock is a file lock, not a
     # coroutine, and it must cover the whole browser lifetime.
-    with ProfileLock(p.browser_profile, timeout=60):
+    # A stale lock must not stall a login forever: the lock wait is bounded, and a
+    # login left behind by a dead process is exactly what --fix clears.
+    with ProfileLock(p.browser_profile, timeout=min(60, max(1, timeout))):
         return await _login_with_browser(async_playwright, p, vault, timeout, headless)
 
 
@@ -110,7 +113,11 @@ async def _login_with_browser(async_playwright, p, vault, timeout, headless) -> 
             deadline = time.time() + timeout
             found: dict[str, str] = {}
             while time.time() < deadline:
-                cookies = {str(c.get("name")): str(c.get("value")) for c in await ctx.cookies(muse.SITE)}
+                # Bound each cookie read: a wedged page must not outlast the deadline.
+                cookies = {
+                    str(c.get("name")): str(c.get("value"))
+                    for c in await asyncio.wait_for(ctx.cookies(muse.SITE), timeout=10)
+                }
                 found = {n: cookies[n] for n in muse.SESSION_COOKIES if n in cookies}
                 if len(found) == len(muse.SESSION_COOKIES) and await _verified(ctx):
                     meta = {

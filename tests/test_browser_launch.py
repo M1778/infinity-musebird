@@ -125,10 +125,15 @@ def test_login_never_passes_headless_itself(monkeypatch, tmp_path):
         # Times out looking for cookies; the point is that launch succeeded.
         import asyncio
 
-        asyncio.run(login(paths_=type("P", (), {
-            "browser_profile": tmp_path / "profile",
-            "ensure": lambda self: None,
-        })(), timeout=0.2))
+        class FakePaths:
+            # Real Paths, not a stub: ProfileLock and the vault both use it.
+            browser_profile = tmp_path / "profile"
+
+            def ensure(self):
+                (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
+                return tmp_path
+
+        asyncio.run(login(paths_=FakePaths(), timeout=0.2))
 
     assert calls.get("headless") is False, calls
     assert calls.get("goto") == "https://muse.ai", calls
