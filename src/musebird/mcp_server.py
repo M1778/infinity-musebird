@@ -56,6 +56,36 @@ def _err(exc: Exception) -> str:
     return json.dumps(payload, indent=2)
 
 
+async def _probe_session(driver_name: str) -> dict:
+    """Probe the live session in a private event loop.
+
+    Playwright spawns a subprocess, and the MCP server's anyio loop forbids that: it
+    cancels the wait and takes the whole server down. `run_off_loop` hands the work
+    to a thread with plain asyncio.
+    """
+    from musebird.offloop import run_off_loop
+
+    async def work() -> dict:
+        d = create_driver(driver_name, "selftest")
+        try:
+            state = await d.ensure_session()
+            return {
+                "valid": state.valid,
+                "account": state.account,
+                "detail": state.detail,
+            }
+        finally:
+            await d.close()
+
+    try:
+        return await run_off_loop(work, timeout=120)
+    except Exception as exc:  # a probe failure must not fail the whole call
+        return {
+            "valid": False,
+            "detail": getattr(exc, "message", None) or type(exc).__name__,
+        }
+
+
 def _registry() -> JobRegistry:
     return JobRegistry(paths())
 
@@ -110,14 +140,7 @@ async def muse_status(driver: str = "browser", selftest: bool = False) -> str:
         if not summary_data["stored"]:
             result["session"]["login_required"] = True
         if selftest:
-            d = create_driver(driver, "selftest")
-            try:
-                state = await d.ensure_session()
-                result["session"]["valid"] = state.valid
-                result["session"]["account"] = state.account
-                result["session"]["detail"] = state.detail
-            finally:
-                await d.close()
+            result["session"].update(await _probe_session(driver))
         if result["session"].get("valid") is True:
             status = "signed in (verified)"
         elif result["session"].get("valid") is False:
@@ -136,9 +159,12 @@ async def muse_status(driver: str = "browser", selftest: bool = False) -> str:
 async def muse_login() -> str:
     """Open a browser on this machine so the user can sign in to Muse once."""
     try:
+        from musebird.offloop import run_off_loop
         from musebird.session.login import login
 
-        result = await login()
+        # Non-interactive sign-in gets a short window; a person needs longer and
+        # should run `musebird login` in a terminal, which is what the hint says.
+        result = await run_off_loop(lambda: login(), timeout=120)
         return _ok("Logged in; session stored locally.", **result.to_dict())
     except Exception as exc:
         return _err(exc)
