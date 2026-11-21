@@ -49,9 +49,9 @@ jobs:
           done
 
       - name: Tests
-        # -s disables output capture: with capture active, pytest-timeout dies inside
-        # _pytest.capture and hides which test hung. Verified necessary on Windows CI.
-        run: uv run pytest -q -s --timeout=180
+        # -v prints each test name before it runs, so a hang (or a hard kill that
+        # prevents pytest-timeout from reporting) still leaves the culprit in the log.
+        run: uv run pytest -v -s --timeout=120
       - name: Wheel contains every subpackage
         run: uv run pytest -q tests/test_packaging.py
   secret-scan:
