@@ -248,3 +248,29 @@ def test_singleton_pid_parses_both_platform_formats(tmp_path):
     garbage = tmp_path / "garbage.lock"
     garbage.write_text("not a pid")
     assert _singleton_pid(garbage) is None
+
+
+def test_lock_status_never_blocks_on_a_held_lock(tmp_path):
+    """`doctor` must answer even while a job holds the lock.
+
+    On Windows, probing by attempting a blocking lock can hang inside the OS call, so
+    lock_status performs exactly one non-blocking try. This asserts it returns while
+    the lock is held rather than waiting.
+    """
+    import time
+
+    from musebird.browser_lock import ProfileLock, lock_status
+
+    profile = tmp_path / "bp-nonblock"
+    profile.mkdir()
+    held = ProfileLock(profile, timeout=1)
+    held.__enter__()
+    try:
+        started = time.monotonic()
+        status = lock_status(profile)
+        elapsed = time.monotonic() - started
+        assert status["held"] is True
+        # A blocking probe would take at least the timeout (or forever on Windows).
+        assert elapsed < 1.0, f"lock_status blocked for {elapsed:.2f}s"
+    finally:
+        held.__exit__()

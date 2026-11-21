@@ -184,10 +184,21 @@ def lock_status(profile: Path) -> dict:
             encoding="utf-8", errors="replace"
         ).strip()
         info["pid"] = int(raw) if raw.isdigit() else None
-    probe = ProfileLock(profile, timeout=0.05, poll=0.01)
+    # Probe with a single non-blocking attempt. On Windows, msvcrt.locking against a
+    # byte another handle holds can block inside the OS call instead of returning, so
+    # "try with a timeout" is not safe here: exactly one attempt, never a wait.
+    probe = ProfileLock(profile, timeout=0.0, poll=0.0)
     try:
-        probe.__enter__()
-        probe.__exit__()
-    except Exception:
+        probe._fd = os.open(probe.path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
         info["held"] = True
+        return info
+    got = probe._try_lock()
+    info["held"] = not got
+    if got:
+        probe.__exit__()
+    else:
+        with contextlib.suppress(OSError):
+            os.close(probe._fd)
+        probe._fd = None
     return info
