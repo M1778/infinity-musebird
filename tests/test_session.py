@@ -77,7 +77,10 @@ def test_quota_cache_ttl(sandbox_home, monkeypatch):
     assert cache.get() is None
     cache.put({"used": 5.0, "limit": 100.0})
     assert cache.fresh()["used"] == 5.0
-    monkeypatch.setattr("musebird.session.keepalive.time.time", lambda: 10**10)
+    # Shift only the cache's view of now. Patching `time.time` patches the global
+    # module, which freezes every timer in the process (it starved pytest-timeout on
+    # Windows and hung CI).
+    monkeypatch.setattr(cache, "_now", lambda: 10**20)
     assert cache.fresh() is None
     assert cache.get()["used"] == 5.0
 

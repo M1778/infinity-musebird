@@ -31,6 +31,11 @@ class QuotaCache:
         self.paths = paths_ or paths()
         self.ttl = ttl
 
+    @staticmethod
+    def _now() -> float:
+        """Injectable clock; tests override this instead of the global time module."""
+        return time.time()
+
     def get(self) -> dict | None:
         path = self.paths.quota_cache
         if not path.exists():
@@ -50,12 +55,12 @@ class QuotaCache:
             return None
         if data.get("used") is None:
             return None
-        if time.time() - float(data.get("_cached_at", 0)) > self.ttl:
+        if self._now() - float(data.get("_cached_at", 0)) > self.ttl:
             return None
         return data
 
     def put(self, quota: dict) -> None:
-        payload = {**quota, "_cached_at": time.time()}
+        payload = {**quota, "_cached_at": self._now()}
         self.paths.root.mkdir(parents=True, exist_ok=True)
         self.paths.quota_cache.write_text(json.dumps(payload, indent=2))
 
