@@ -11,7 +11,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-EventKind = Literal["info", "progress", "text", "file", "needs_input", "done", "error"]
+EventKind = Literal[
+    "info", "progress", "text", "file", "needs_input", "done", "completed", "error"
+]
 
 
 @dataclass

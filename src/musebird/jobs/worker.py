@@ -148,8 +148,8 @@ class Worker:
             events, cursor = await driver.stream_events(thread, cursor)
             for event in events:
                 last_activity = time.time()
-                if event.kind == "done":
-                    self.registry.append_event(self.job_id, event.text or "done", kind="done")
+                if event.kind in ("done", "completed"):
+                    self.registry.append_event(self.job_id, event.text or "reply finished")
                     return True
                 if event.kind == "needs_input":
                     question = event.text

@@ -343,3 +343,105 @@ def test_usage_parses_zero_percent_correctly():
     assert parsed["found"] is True
     assert parsed["weekly_used_pct"] == 0.0
     assert parsed["resets_at"] == "Nov 27"
+
+
+@pytest.mark.asyncio
+async def test_a_sentinel_less_reply_is_reported_once(monkeypatch):
+    """A finished reply without a sentinel must settle, not spam the event log.
+
+    Live bug: a fan-out job emitted 'reply finished without a sentinel' on every
+    poll — 870 events — so the worker never moved on to the manifest fallback.
+    """
+    from musebird.drivers.browser.driver import BrowserDriver
+
+    class NoApproval:
+        async def count(self):
+            return 0
+
+    class Page:
+        def locator(self, sel):
+            return NoApproval()
+
+    driver = BrowserDriver("t")
+    driver._page = Page()
+    driver._last_text = "I finished, but forgot the sentinel."
+    driver._stable = 99  # already stable
+
+    async def no_sleep(_s):
+        return None
+
+    monkeypatch.setattr("musebird.drivers.browser.driver.asyncio.sleep", no_sleep)
+
+    async def bubbles():
+        return ["I finished, but forgot the sentinel."]
+
+    async def not_generating():
+        return False
+
+    monkeypatch.setattr(driver, "_read_bubbles", bubbles)
+    monkeypatch.setattr(driver, "_read_assistant_text", lambda: _coro(driver._last_text))
+    monkeypatch.setattr(driver, "_generating", not_generating)
+
+    events1, _ = await driver.stream_events(_thread(), 0)
+    events2, _ = await driver.stream_events(_thread(), 1)
+    settled = [e for e in events1 if e.kind == "completed"]
+    assert settled, events1
+    assert not [e for e in events2 if e.kind == "completed"], events2
+
+
+async def _coro(value):
+    return value
+
+
+def _thread():
+    from musebird.drivers.base import ThreadRef
+
+    return ThreadRef(id="t", url="u")
+
+
+@pytest.mark.asyncio
+async def test_reopen_baselines_on_the_settled_bubble_count(monkeypatch):
+    """Hydration can show transient bubbles; a stale baseline hides every reply.
+
+    Live bug: reopen() recorded 5 bubbles while the settled DOM had 3, so the
+    'new bubble' branch never fired and _last_text stayed empty. A finished thread
+    whose sentinel was on screen was treated as silent forever.
+    """
+    from musebird.drivers.browser.driver import BrowserDriver
+
+    reads = {"n": 0}
+
+    driver = BrowserDriver("t")
+
+    class Page:
+        url = "https://muse.ai/thread/abc"
+
+        async def goto(self, url, wait_until=None):
+            return None
+
+    async def fake_launch():
+        driver._ctx = object()
+        driver._page = Page()
+
+    async def fake_wait(*a, **k):
+        return None
+
+    async def fake_side_chat(page):
+        return True
+
+    async def rumoured_bubbles():
+        # First reads see transient extras, then settle on 3 real bubbles.
+        reads["n"] += 1
+        return ["a", "b", "c", "x", "y"] if reads["n"] < 3 else ["a", "b", "c"]
+
+    async def no_sleep(_s):
+        return None
+
+    monkeypatch.setattr(driver, "_launch", fake_launch)
+    monkeypatch.setattr(driver, "_wait_hydrated", fake_wait)
+    monkeypatch.setattr("musebird.drivers.browser.driver.page_is_side_chat", fake_side_chat)
+    monkeypatch.setattr(driver, "_read_bubbles", rumoured_bubbles)
+    monkeypatch.setattr("musebird.drivers.browser.driver.asyncio.sleep", no_sleep)
+
+    await driver.reopen("https://muse.ai/thread/x")
+    assert driver._bubble_count == 3, f"baseline taken during hydration: {driver._bubble_count}"

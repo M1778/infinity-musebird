@@ -50,6 +50,7 @@ class BrowserDriver(MuseDriver):
         self._stable = 0
         self._profile_lock = None
         self._filenames: list[str] = []
+        self._settled = False
 
     # -- lifecycle -------------------------------------------------------
     async def _launch(self) -> None:
@@ -304,6 +305,10 @@ class BrowserDriver(MuseDriver):
                 "refusing to resume: the saved thread is not a side chat",
                 hint="Start a new job; the old thread will not be reused.",
             )
+        # Take the baseline only once the conversation stops changing. Reading it
+        # during hydration can count transient placeholder bubbles (5 observed where
+        # the settled DOM had 3), which then hides every later reply.
+        await self._settle_bubbles()
         self._last_text = ""
         self._bubble_count = len(await self._read_bubbles())
         return ThreadRef(id=f"browser-{self.job_id}", url=url)
@@ -362,6 +367,22 @@ class BrowserDriver(MuseDriver):
         except Exception as exc:
             raise UpstreamError(f"attachment upload failed: {type(exc).__name__}") from exc
 
+    async def _settle_bubbles(self, timeout_s: float = 10.0) -> None:
+        """Wait until the bubble count is stable for a few consecutive reads."""
+        last = -1
+        stable = 0
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            count = len(await self._read_bubbles())
+            if count == last:
+                stable += 1
+                if stable >= 3:
+                    return
+            else:
+                last = count
+                stable = 0
+            await asyncio.sleep(0.4)
+
     async def _read_bubbles(self) -> list[str]:
         try:
             return await self._page.eval_on_selector_all(
@@ -395,8 +416,9 @@ class BrowserDriver(MuseDriver):
             return [], cursor
         await asyncio.sleep(muse.POLL_INTERVAL_S)
         bubbles = await self._read_bubbles()
-        if bubbles and self._bubble_count is not None and len(bubbles) > self._bubble_count:
-            # A new bubble begins: the previous reply is history, not this turn.
+        if bubbles and self._bubble_count is not None and len(bubbles) != self._bubble_count:
+            # A new bubble begins, or the list re-rendered: either way the previous
+            # reply is history, not this turn.
             self._bubble_count = len(bubbles)
             self._last_text = ""
         text = await self._read_assistant_text()
@@ -427,9 +449,12 @@ class BrowserDriver(MuseDriver):
                         "needs_input", f"{muse.NEEDS_INPUT_SENTINEL} {self.job_id}: {payload}"
                     )
                 )
-            else:
+            elif not self._settled:
+                # Emit once. Repeating this every poll flooded the event log and made
+                # the worker look busy forever instead of moving to the manifest check.
+                self._settled = True
                 events.append(
-                    DriverEvent("info", "reply finished without a sentinel; will check manifest")
+                    DriverEvent("completed", "reply finished without a sentinel")
                 )
         elif generating:
             # Only report real work. A quiet poll returning "info" would reset the
