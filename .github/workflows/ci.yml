@@ -33,9 +33,27 @@ jobs:
       - name: Build wheel
         run: uv build --wheel .
       - name: Tests
-        run: uv run pytest -q
+        # -s disables output capture: with capture active, pytest-timeout dies inside
+        # _pytest.capture and hides which test hung. Verified necessary on Windows CI.
+        run: uv run pytest -q -s --timeout=90
       - name: Wheel contains every subpackage
         run: uv run pytest -q tests/test_packaging.py
+      - name: Tests per file (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = @()
+          Get-ChildItem tests/test_*.py | ForEach-Object {
+            $name = $_.Name
+            Write-Host "::group::$name"
+            uv run pytest -q -s --timeout=60 $_.FullName
+            if ($LASTEXITCODE -ne 0) { $failed += $name }
+            Write-Host "::endgroup::"
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host "failing files: $($failed -join ', ')"
+            exit 1
+          }
 
   secret-scan:
     runs-on: ubuntu-latest
