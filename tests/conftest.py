@@ -7,6 +7,12 @@ from pathlib import Path
 
 import pytest
 
+# Never touch a real OS keychain while testing. On Windows, importing keyring
+# probes the Credential Manager, which can block for minutes and hang CI; tests also
+# must not read or write the developer's real secrets. This is read by keyring at
+# import time, so it has to be set before musebird imports it.
+os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+
 from musebird.config import Paths
 
 
