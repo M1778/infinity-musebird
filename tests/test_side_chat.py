@@ -221,3 +221,24 @@ def test_a_rejected_attempt_does_not_clear_the_holders_pid(tmp_path):
         assert lock_status(profile)["pid"] == __import__("os").getpid()
     finally:
         held.__exit__()
+
+
+def test_singleton_pid_parses_both_platform_formats(tmp_path):
+    """POSIX stores hostname-pid in a symlink; Windows stores a file with 'host:pid'."""
+    from musebird.browser_lock import _singleton_pid
+
+    posix_style = tmp_path / "posix.lock"
+    posix_style.write_text("HOST-1234")
+    assert _singleton_pid(posix_style) == 1234
+
+    win_style = tmp_path / "win.lock"
+    win_style.write_text("DESKTOP-ABC:4321")
+    assert _singleton_pid(win_style) == 4321
+
+    bare = tmp_path / "bare.lock"
+    bare.write_text("777")
+    assert _singleton_pid(bare) == 777
+
+    garbage = tmp_path / "garbage.lock"
+    garbage.write_text("not a pid")
+    assert _singleton_pid(garbage) is None

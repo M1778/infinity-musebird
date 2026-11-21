@@ -40,16 +40,43 @@ def clear_stale_singletons(profile: Path) -> list[str]:
             continue
         with contextlib.suppress(Exception):
             if name == "SingletonLock":
-                target = os.readlink(link)
-                pid = int(str(target).rsplit("-", 1)[-1])
-                try:
-                    os.kill(pid, 0)
+                pid = _singleton_pid(link)
+                if pid is not None and _pid_alive(pid):
                     continue  # a live process owns it: leave it alone
-                except (ProcessLookupError, PermissionError):
-                    pass
             link.unlink()
             removed.append(name)
     return removed
+
+
+def _singleton_pid(link: Path) -> int | None:
+    """The pid Chromium recorded, if this platform stores one.
+
+    POSIX: a symlink whose target is `hostname-<pid>`. Windows: a normal file whose
+    content is `<hostname>:<pid>` or a bare pid. Anything unparseable means "unknown",
+    which the caller treats as stale.
+    """
+    try:
+        raw = os.readlink(link) if link.is_symlink() else link.read_text(errors="replace")
+    except OSError:
+        return None
+    text = str(raw).strip()
+    tail = text.replace(":", "-").rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when a process with this pid exists and is not a zombie."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    except OSError:
+        return False
+    return True
 
 
 class ProfileLock:
