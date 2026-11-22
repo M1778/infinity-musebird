@@ -257,7 +257,8 @@ async def test_completion_with_no_files_fails_loudly(tmp_path, project):
     ).run()
     assert final.state == st.FAILED
     assert final.error_code == "no_output"
-    assert "no retrievable files" in (final.error or "")
+    assert "retrievable files" in (final.error or "")
+    assert "muse_job_message" in (final.error or "")  # tells the user how to recover
 
 
 async def test_extracted_manifest_wins_over_a_loose_copy(tmp_path, git_project):

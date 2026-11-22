@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.5 — 2026-11-22
+
+A question is not a result. From `job_20261122_172637_45f539`, where Muse asked
+"do you confirm you want me to spend the 8 agents / quota?" and the job failed 60
+seconds later with `no_output` — the question was lost and could not be answered.
+
+### Fixed
+- **A sentinel-less reply asking a question becomes `needs_input`.** Classification is
+  conservative and looks for evidence of asking: explicit confirmation phrases
+  ("do you confirm", "should I proceed", "let me know"), a trailing question together
+  with waiting language ("I haven't started", "until you confirm"), or a short reply
+  that is only a question. A bare `?` is never enough, and questions inside code fences
+  or block quotes are ignored. Anything unproven is reported as `ambiguous`, not
+  silently completed.
+- **The failure message no longer claims completion.** It said "Muse reported
+  completion" even when the reply said it had not started; it now says the turn ended
+  without retrievable files and points at `muse_job_message` to resume.
+- **An answered job can be resumed.** `muse_job_message` accepts a `FAILED` job when it
+  has a saved thread and the failure was `no_output`/`upstream_error`, moves it back to
+  `running` on that same thread, and does not re-send the task or add agents. Guard and
+  validation failures stay terminal, because retrying those only fails again.
+- **The prompt states pre-approved scope.** Muse was stopping to confirm agent count,
+  quota spend and sandbox limits the user had already approved. The job prompt now says
+  so explicitly and instructs it not to ask again.
+
+### Added
+- `tests/test_reply_classification.py` — the live two-chunk reply, an explicit sentinel,
+  a deliverable containing a question, a question in a code fence, a quoted
+  instruction, a plain finished reply, and the resume/refuse-resume paths.
+
+Verified against the preserved job: reconstructing its two text events through the new
+classifier yields `needs_input` with the real question.
+
 ## 0.1.4 — 2026-11-22
 
 Correctness of what the tool *claims*, after review of the 0.1.3 fixes.

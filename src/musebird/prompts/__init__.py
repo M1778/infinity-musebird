@@ -18,7 +18,22 @@ def contract_text() -> str:
         return FALLBACK_CONTRACT.read_text(encoding="utf-8")
 
 
-def build_prompt(task: str, job_id: str, *, mode: str = "single", agents: int = 1) -> str:
+def build_prompt(
+    task: str,
+    job_id: str,
+    *,
+    mode: str = "single",
+    agents: int = 1,
+    approval_note: str | None = None,
+) -> str:
+    """Assemble the task and the contract.
+
+    `approval_note` records decisions the user already made before this job started
+    (agent count, quota spend, sandbox limits). Without it Muse may stop to confirm
+    scope that was in fact approved, which costs a round trip and can lose the job —
+    live evidence: job_20261122_172637_45f539 asked "do you confirm you want me to
+    spend the 8 agents / quota?" and nothing had started.
+    """
     header = [
         "You are running inside a MuseBird job.",
         f"Job id: {job_id}",
@@ -26,8 +41,24 @@ def build_prompt(task: str, job_id: str, *, mode: str = "single", agents: int = 
     ]
     if mode == "fanout":
         header.append(f"Fan out into {agents} subagents, cross-review, then merge.")
+    if approval_note:
+        header.append(
+            "ALREADY APPROVED by the user before this job started — do not ask again: "
+            + approval_note
+        )
     body = "\n".join(header) + "\n\n" + contract_text() + "\n\n## Task\n\n" + task.strip() + "\n"
     return body
+
+
+def approval_note(mode: str, agents: int) -> str:
+    """The scope facts the user already settled by starting this job."""
+    limits = (
+        "work only inside out/, never read or write outside it, and attach "
+        "out.tar.gz plus out/MANIFEST.json when done"
+    )
+    if mode == "fanout":
+        return f"spending quota on {agents} agents; {limits}."
+    return f"spending quota on this single job; {limits}."
 
 
 DONE_RE = re.compile(rf"{re.escape(muse.DONE_SENTINEL)}\s+(\S+)")

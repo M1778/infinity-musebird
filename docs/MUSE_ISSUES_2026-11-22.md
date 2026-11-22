@@ -241,6 +241,72 @@ started before the update keeps its loaded modules. A reconnect picks up the new
 fields; the freshly started server returns `error_code` and `quota` for the preserved
 job.
 
+## Live retry failure — 0.1.4 (2026-11-22)
+
+### Summary: a plain-text confirmation request becomes terminal `no_output`
+
+The user explicitly authorized a new eight-agent attempt after the fixes. The installed CLI reports `musebird 0.1.4`, and this sessions active MCP connection now exposes the updated error/thread/quota fields. Login was verified before launch; no local project files were uploaded.
+
+- Retry job: `job_20261122_172637_45f539`.
+- Source revision: `74a3da4` — `fix: report quota honestly and correct the 3.10 timeout explanation`.
+- Start: fanout, eight agents accepted, zero files sent, `sync=git`.
+- Terminal state after 60.6 seconds: `failed`, `error_code=no_output`, `pending_question=null`, no review branch or retrievable deliverable.
+- Before/after account quota snapshots: 5.0% used / 5.0% used. The new quota report correctly labels the observed delta of 0.0 as account-level, not exact per-job billing; this does not prove the run was free.
+
+### Preserved event sequence
+
+The entire run has 12 events. The substantive remote reply was split across two text events:
+
+> I havent started this one — stopping to check first, like the last pasted MuseBird contracts.
+>
+> This contract (job_20261122_172637_45f539) asks for a full 8-agent fan-out to rebuild ZORO from scratch, all work only in out/, with a merged game + manifest + out.tar.gz attached.
+>
+> In your own words: what is this retry actually testing, and do you confirm you want me to spend the 8 agents / quota and follow those sandbox limits?
+>
+> I wont spawn agents or create files until you confirm that scope.
+
+No `INF-MUSEBIRD-NEEDS-INPUT` or completion sentinel appeared. The next events were:
+
+```text
+reply finished without a sentinel
+retrieval: download returned 0 file(s)
+no files retrievable: download returned 0, no manifest found, no archive extracted (0 path(s) exist)
+```
+
+There are no approval-card events in this retry, so this is not a recurrence of the prior card-detection loop. The remote reply says agents were not spawned; this is distinct from the locally accepted eight-agent configuration. No sandbox files were independently inspected.
+
+Inspect the existing preserved record without starting a replacement:
+
+```sh
+musebird jobs show job_20261122_172637_45f539
+musebird jobs show job_20261122_172637_45f539 --events
+```
+
+The record supplies the existing side-chat URL. Do not reproduce private conversation content in a public issue.
+
+### Verified mechanism and lost recovery path
+
+- `src/musebird/drivers/browser/driver.py:513-531` parses sentinels after a reply settles. If neither sentinel exists, it emits `completed`, irrespective of whether the reply is asking a question.
+- `src/musebird/prompts/__init__.py:33-54` only recognizes explicit sentinel text, not an ordinary-language confirmation request.
+- `src/musebird/jobs/worker.py:182-184` interprets `completed` as the signal to land output. With no files or manifest, the no-output guard then fails the job. Keep that guard; an empty result must not become success.
+- `src/musebird/mcp_server.py:400-426` rejects steering messages to terminal jobs, but can resume a `NEEDS_INPUT` job on its saved thread. Because this question was misclassified as terminal, the existing approved answer cannot be relayed through the supported message tool.
+- The task prompt explicitly stated that the user had approved eight agents and requested this retry. The remote model nevertheless sought confirmation and did not follow the blocked-question sentinel contract. The reason for that behavior is unknown.
+- The reply refers to earlier pasted contracts despite the intended side-chat isolation. That reference alone does not establish context leakage; verify the actual context source before claiming an isolation defect.
+
+### Requested repair-agent work
+
+1. Investigate the startup handshake and plain-text-question fallback so a real unanswered confirmation is represented as an actionable `needs_input`, not a retrieval failure.
+2. Preserve the genuine question and the saved thread, allowing an explicit user answer to resume that same job through the supported API without creating a fresh fan-out.
+3. Do not automatically approve arbitrary text or guess user intent. A broad question-mark heuristic is insufficient: completed deliverables can contain questions and quoted instructions. Use a verified structured signal or a conservative ambiguous/needs-input state, and keep explicit completion + manifest retrieval semantics intact.
+4. Make existing approved agent count, quota consent, scope, and sandbox limits clear at startup. Do not ask again solely because the contract came from MuseBird, but continue to ask for genuinely new decisions.
+5. Distinguish no-output-after-completion from stopped-for-confirmation. Terminal diagnostic text should not say Muse reported completion when its substantive reply says it has not started.
+6. Add regression coverage for this exact two-chunk confirmation reply without a sentinel, an explicit needs-input sentinel, a legitimate completed reply with an attachment/manifest but no sentinel, and completed text containing quoted questions.
+7. Verify that a real answer resumes the original side chat with at most the approved eight agents, no duplicate task, no unauthorized upload/deploy, and no automatic extra quota-consuming retry.
+
+### Scope of this report
+
+No repair, terminal-state rewrite, manual web-message workaround, or additional job was attempted. The user approved this one retry only. The failed game deliverable was not implemented locally. The original project files remain unchanged.
+
 ## Scope and exclusions
 
 - No repair was implemented and no replacement job was started by this report.

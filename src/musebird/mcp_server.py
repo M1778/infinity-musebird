@@ -90,8 +90,9 @@ async def _probe_session(driver_name: str) -> dict:
 #: so every consumer of muse_job_status gets the same explanation.
 _NEXT_STEPS = {
     "no_output": (
-        "Muse finished but nothing was retrievable. Open thread_url to see what it "
-        "produced, and check the events for whether a manifest or attachments appeared."
+        "Muse finished its turn without retrievable files. It may have stopped to ask "
+        "a question: read thread_url, then answer with muse_job_message to resume this "
+        "job on the same thread."
     ),
     "manifest_error": (
         "Files arrived but did not match their manifest. The landing directory is kept "
@@ -401,7 +402,15 @@ async def muse_job_message(job_id: str, message: str) -> str:
     """Send a steering message to a running job."""
     try:
         job = _registry().get(job_id)
-        if st.is_terminal(job.state):
+        # A job that stopped because Muse asked something (or produced nothing) can be
+        # resumed by an explicit answer. Failures caused by our own guard are not
+        # resumable: repeating them would just fail again.
+        resumable_failure = (
+            job.state == st.FAILED
+            and job.thread_url
+            and job.error_code in ("no_output", "upstream_error")
+        )
+        if st.is_terminal(job.state) and not resumable_failure:
             raise MuseBirdError(f"job is already {job.state}")
         path = paths().jobs / f"{job_id}.messages.jsonl"
         with open(path, "a", encoding="utf-8") as fh:
@@ -409,10 +418,16 @@ async def muse_job_message(job_id: str, message: str) -> str:
         registry = _registry()
         registry.append_event(job_id, "queued steering message")
         resumed = False
-        if job.state == st.NEEDS_INPUT:
-            # Answering the question is what moves the job out of needs_input, and a
-            # fresh worker reattaches to the saved thread rather than restarting the task.
-            registry.update(job_id, state=st.RUNNING, pending_question=None)
+        if job.state in (st.NEEDS_INPUT, st.FAILED):
+            # Answering is what moves the job forward, and a fresh worker reattaches to
+            # the saved thread rather than re-sending the task or adding agents.
+            registry.update(
+                job_id,
+                state=st.RUNNING,
+                pending_question=None,
+                allow_terminal=job.state == st.FAILED,
+            )
+            registry.clear_cancel(job_id)
             spawn(job_id)
             resumed = True
         return _ok(

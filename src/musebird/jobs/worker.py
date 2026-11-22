@@ -22,7 +22,7 @@ from musebird.errors import MuseBirdError, UpstreamError
 from musebird.guard.paths import Caps
 from musebird.jobs import state as st
 from musebird.jobs.registry import Job, JobRegistry
-from musebird.prompts import build_prompt, parse_sentinel
+from musebird.prompts import approval_note, build_prompt, parse_sentinel
 from musebird.sync import landing, manifest
 from musebird.upstream import muse
 
@@ -87,7 +87,13 @@ class Worker:
             self.registry.update(job.id, state=st.RUNNING, quota_before=quota_before)
             thread = await self._resume_or_open(driver)
             if not self._sent:
-                prompt = build_prompt(job.prompt, job.id, mode=job.mode, agents=job.agents)
+                prompt = build_prompt(
+                    job.prompt,
+                    job.id,
+                    mode=job.mode,
+                    agents=job.agents,
+                    approval_note=approval_note(job.mode, job.agents),
+                )
                 await driver.send(thread, prompt, job.upload_paths or None)
                 self._sent = True
                 # The driver learns the real /thread/<id> only after the first send
@@ -320,8 +326,9 @@ class Worker:
                 self.registry.update(
                     job.id, state=st.FAILED,
                     error=(
-                        "Muse reported completion but attached no retrievable files. "
-                        "Open the thread to see what it produced."
+                        "Muse finished its turn without producing retrievable files. "
+                        "It may have stopped to ask something: open the thread to read "
+                        "the reply, then answer with muse_job_message to resume this job."
                     ),
                     error_code="no_output",
                     landing_dir=str(dest),

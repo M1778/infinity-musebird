@@ -25,6 +25,9 @@ ALLOWED: Final[dict[str, frozenset[str]]] = {
     WAKING: frozenset({RUNNING, FAILED, CANCELLED}),
     RUNNING: frozenset({NEEDS_INPUT, DONE, FAILED, CANCELLED}),
     NEEDS_INPUT: frozenset({RUNNING, DONE, FAILED, CANCELLED}),
+    # A failed job can be resumed by an explicit user answer on its saved thread. It
+    # is never resumed automatically: retrying costs quota, which is the user's call.
+    FAILED: frozenset({RUNNING}),
 }
 
 

@@ -11,7 +11,7 @@
 #>
 
 $ErrorActionPreference = "Stop"
-$MusebirdVersion = if ($env:MUSEBIRD_VERSION) { $env:MUSEBIRD_VERSION } else { "0.1.4" }
+$MusebirdVersion = if ($env:MUSEBIRD_VERSION) { $env:MUSEBIRD_VERSION } else { "0.1.5" }
 $Repo = "M1778/infinity-musebird"
 
 function Say($msg) { Write-Host $msg }

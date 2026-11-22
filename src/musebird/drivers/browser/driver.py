@@ -523,12 +523,36 @@ class BrowserDriver(MuseDriver):
                     )
                 )
             elif not self._settled:
-                # Emit once. Repeating this every poll flooded the event log and made
-                # the worker look busy forever instead of moving to the manifest check.
-                self._settled = True
-                events.append(
-                    DriverEvent("completed", "reply finished without a sentinel")
-                )
+                # No sentinel. Before declaring completion, work out whether Muse is
+                # actually asking the user something: a question misread as completion
+                # becomes a terminal no_output failure and the job can no longer be
+                # answered (job_20261122_172637_45f539).
+                from musebird.prompts.classify import classify
+
+                verdict = classify(self._last_text)
+                if verdict.kind == "needs_input" and verdict.question:
+                    self._settled = True
+                    events.append(
+                        DriverEvent(
+                            "needs_input",
+                            f"{muse.NEEDS_INPUT_SENTINEL} {self.job_id}: {verdict.question}",
+                        )
+                    )
+                elif verdict.kind == "completed":
+                    self._settled = True
+                    events.append(
+                        DriverEvent("completed", f"reply finished: {verdict.reason}")
+                    )
+                else:
+                    # Ambiguous: report it, but do not retry it every poll.
+                    self._settled = True
+                    events.append(
+                        DriverEvent(
+                            "completed",
+                            f"reply finished without a sentinel ({verdict.reason}); "
+                            "checking for retrievable output",
+                        )
+                    )
         elif generating:
             # Only report real work. A quiet poll returning "info" would reset the
             # worker's idle timer forever and grow the event log one line per poll.

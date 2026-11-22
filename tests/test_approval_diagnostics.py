@@ -276,3 +276,90 @@ async def test_a_blocked_job_is_not_kept_alive_by_generic_progress(tmp_path, pro
         worker_module.IDLE_TIMEOUT = original
     assert final.state == st.FAILED, "generic progress masked a blocked job"
     assert "went quiet" in (final.error or "")
+
+
+async def test_a_failed_job_with_a_question_is_resumable(tmp_path, project, sandbox_home):
+    """An answered job resumes on its saved thread instead of starting over.
+
+    Live failure: a confirmation question was misread as completion, the job failed,
+    and `muse_job_message` refused to act because the state was terminal.
+    """
+    import os
+    import sys
+
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+
+    reg = JobRegistry()
+    job = reg.create(prompt="build the game", project=str(project), driver="mock")
+    reg.update(job.id, state=st.WAKING)
+    reg.update(job.id, state=st.RUNNING)
+    reg.update(
+        job.id,
+        state=st.FAILED,
+        error="Muse finished its turn without producing retrievable files.",
+        error_code="no_output",
+        thread_url="https://muse.ai/thread/keep-me",
+    )
+
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "musebird", "mcp"],
+        env={**os.environ, "MUSEBIRD_HOME": str(sandbox_home.root)},
+    )
+    async with (
+        stdio_client(params) as (r, w),
+        ClientSession(r, w) as session,
+    ):
+        await session.initialize()
+        res = await session.call_tool(
+            "muse_job_message", {"job_id": job.id, "message": "Yes, confirmed."}
+        )
+        payload = json.loads(res.content[0].text)
+
+    assert payload["ok"] is True, payload
+    assert payload["resumed"] is True
+    after = reg.get(job.id)
+    assert after.state == st.RUNNING
+    # The saved thread is kept: the answer continues the same conversation.
+    assert after.thread_url == "https://muse.ai/thread/keep-me"
+
+
+async def test_a_guard_failure_is_not_resumable(tmp_path, project, sandbox_home):
+    """Resuming a guard failure would only fail again."""
+    import os
+    import sys
+
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    reg = JobRegistry()
+    job = reg.create(prompt="x", project=str(project), driver="mock")
+    reg.update(job.id, state=st.WAKING)
+    reg.update(job.id, state=st.RUNNING)
+    reg.update(
+        job.id,
+        state=st.FAILED,
+        error="archive rejected by the guard",
+        error_code="guard_violation",
+        thread_url="https://muse.ai/thread/x",
+    )
+
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "musebird", "mcp"],
+        env={**os.environ, "MUSEBIRD_HOME": str(sandbox_home.root)},
+    )
+    async with (
+        stdio_client(params) as (r, w),
+        ClientSession(r, w) as session,
+    ):
+        await session.initialize()
+        res = await session.call_tool(
+            "muse_job_message", {"job_id": job.id, "message": "retry"}
+        )
+        payload = json.loads(res.content[0].text)
+
+    assert payload["ok"] is False
+    assert reg.get(job.id).state == st.FAILED
