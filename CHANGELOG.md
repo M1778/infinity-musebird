@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.4 — 2026-11-22
+
+Correctness of what the tool *claims*, after review of the 0.1.3 fixes.
+
+### Changed
+- `quota_charged` becomes an honest `quota` report: `{observed, charge, delta_used,
+  note}`. `charge` is `unknown` unless a comparable before/after pair exists, and a
+  missing snapshot is explicitly not-free.
+- Corrected the false claim that Python 3.10's `asyncio.TimeoutError` is
+  `CancelledError`. They are unrelated; the dual catch is still required because the
+  two timeout classes differ until 3.11.
+
+### Added
+- `tests/test_quota_report.py` — missing, unchanged, increased, reset and partial
+  snapshots.
+- A test that caller cancellation stays a cancellation.
+
 ## 0.1.3 — 2026-11-22
 
 Fixes from a live 8-agent job that failed with no output
@@ -19,8 +36,23 @@ Fixes from a live 8-agent job that failed with no output
   would mean inventing the user's intent. A card that can be neither approved nor
   declined becomes `needs_input` with the request text.
 - **Python 3.10 timeout.** `run_off_loop` caught only the builtin `TimeoutError`, but
-  on 3.10 `asyncio.TimeoutError` is `CancelledError`, so a timeout re-raised as a
-  cancellation. Both spellings are now caught — this failed CI on every 3.10 job.
+  until 3.11 `asyncio.TimeoutError` is a *separate* `Exception` subclass and
+  `asyncio.wait_for` raises that flavour, so the timeout escaped unhandled and failed
+  CI on every 3.10 job. Both spellings are now caught; `asyncio.CancelledError` is a
+  `BaseException` and is deliberately not caught, so real cancellation still
+  propagates as cancellation.
+
+### Corrected after review
+- The explanation for the 3.10 fix above originally claimed `asyncio.TimeoutError` is
+  `CancelledError` on 3.10. It is not: they are unrelated classes (`Exception` vs
+  `BaseException`). The code was right, the comment was wrong. Verified against
+  CPython 3.10.22 and documented in a test that asserts the class relationship.
+- `quota_charged` renamed to an honest `quota` report. The old boolean measured whether
+  a snapshot existed, not whether the job cost anything: a missing snapshot is
+  **unknown**, not free, and a present one may be unchanged or reflect other activity.
+  It now returns `{observed, charge, delta_used, note}`, where `charge` is
+  `unknown` unless a comparable before/after pair exists, and even then is labelled an
+  account-level delta rather than a per-job cost.
 - **A blocked job looked alive.** Generic `progress` events reset the no-activity
   deadline, so a stuck job could run indefinitely. Only real output now counts.
 - **Failures were undiagnosable from MCP.** `muse_job_status` omitted the stored

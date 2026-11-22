@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "infinity-musebird"
-version = "0.1.3"
+version = "0.1.4"
 description = "Use Muse as a subagent inside Claude Code, Codex and OpenCode via MCP. Unofficial."
 readme = "README.md"
 license = { file = "LICENSE" }

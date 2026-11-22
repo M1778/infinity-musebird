@@ -206,9 +206,12 @@ async def test_mcp_status_exposes_error_code_and_thread(tmp_path, project, sandb
     assert "thread_url" in payload
     assert payload["next_step"], "a failure needs an actionable next step"
     assert "retrievable" in payload["next_step"].lower()
-    # The failed job DID cost quota, and the status says so.
-    assert payload["quota_charged"] is True
-    assert payload["quota_after"]["used"] == 12.0
+    # The failed job DID cost quota, and the status reports it honestly.
+    quota = payload["quota"]
+    assert quota["observed"] is True
+    assert quota["charge"] == "observed-delta"
+    assert quota["delta_used"] == 0.0  # the mock reports a constant 12.0
+    assert "not an exact per-job cost" in quota["note"]
 
 
 async def test_failure_path_records_quota_when_available(tmp_path, project):

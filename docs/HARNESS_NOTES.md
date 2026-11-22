@@ -140,6 +140,19 @@ text, and the click result is reported. Cards that cannot be dismissed become
 Verified in-page by counting visible `input`/`textarea`/`select`/`contenteditable`
 elements inside the card; no Muse-specific markup assumption beyond that.
 
+## Quota reporting (corrected 2026-11-22)
+
+Quota is account-level and scrape-derived, so per-job cost is usually unknowable. The
+status reports `{observed, charge, delta_used, note}`:
+
+- `charge: "unknown"` whenever there is no terminal snapshot, no baseline, a different
+  quota window, a missing percentage, or usage that fell.
+- `charge: "observed-delta"` only for a comparable before/after pair, with a note that
+  concurrent jobs, resets and rounding can affect an account-level delta.
+
+Saying "unknown" is required: reporting a missing measurement as zero would tell a user
+an 8-agent run was free.
+
 ## Toolchain
 
 - Package: Python 3.10+, `uv` for install and Python provisioning.

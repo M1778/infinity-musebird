@@ -66,7 +66,13 @@ async def test_a_timeout_does_not_leak_a_hanging_thread():
 
 @pytest.mark.asyncio
 async def test_timeout_is_a_timeout_on_every_supported_python():
-    """Python 3.10 aliases asyncio.TimeoutError to CancelledError, not TimeoutError."""
+    """3.10 keeps asyncio.TimeoutError separate from the builtin; both must be caught.
+
+    Until 3.11 they are different classes (`asyncio.TimeoutError` subclasses Exception;
+    the builtin subclasses OSError-era `Exception` too, but they are not aliases), and
+    `asyncio.wait_for` raises the asyncio flavour. `asyncio.CancelledError` is a
+    separate `BaseException` and must keep propagating as cancellation.
+    """
     import sys
 
     async def slow():
@@ -79,3 +85,32 @@ async def test_timeout_is_a_timeout_on_every_supported_python():
     else:  # pragma: no cover
         raise AssertionError("expected a timeout")
     assert sys.version_info >= (3, 10)
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_stays_a_cancellation():
+    """A cancelled caller must not be converted into a timeout."""
+    import asyncio as _asyncio
+
+    async def slow():
+        await _asyncio.sleep(30)
+
+    task = _asyncio.ensure_future(run_off_loop(slow, timeout=30))
+    await _asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(_asyncio.CancelledError):
+        await task
+
+
+def test_timeout_classes_are_distinct_on_310():
+    """Document the class relationship, so the comment cannot drift again."""
+    import sys
+
+    if sys.version_info >= (3, 11):
+        pytest.skip("3.11+ aliases asyncio.TimeoutError to the builtin")
+    import asyncio as _asyncio
+
+    assert not issubclass(_asyncio.TimeoutError, _asyncio.CancelledError)
+    assert not issubclass(_asyncio.CancelledError, Exception)
+    assert _asyncio.TimeoutError is not TimeoutError
+    assert issubclass(_asyncio.TimeoutError, Exception)

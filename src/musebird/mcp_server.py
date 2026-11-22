@@ -107,6 +107,56 @@ _NEXT_STEPS = {
 }
 
 
+def _quota_report(job) -> dict:
+    """What we can honestly say about this job's quota cost.
+
+    Naming matters: an earlier version exposed `quota_charged`, which reported
+    whether a snapshot *existed*. That is not a charge — a null snapshot is unknown
+    cost, not free, and a non-null one may be unchanged or affected by other
+    concurrent jobs, resets or rounding. Reported honestly instead:
+
+      observed   — a terminal snapshot exists
+      delta_used — before/after difference, and only when both exist and the reset
+                   date matches (an incomparable pair says nothing)
+      charge     — "unknown" unless a comparable delta exists
+    """
+    before = job.quota_before or None
+    after = job.quota_after or None
+    report: dict = {
+        "observed": after is not None,
+        "charge": "unknown",
+        "delta_used": None,
+        "note": "",
+    }
+    if after is None:
+        report["note"] = (
+            "no terminal quota snapshot was captured, so this job's cost is unknown, "
+            "not zero"
+        )
+        return report
+    if before is None:
+        report["note"] = "a terminal snapshot exists but there is no baseline to compare"
+        return report
+    if before.get("resets_at") != after.get("resets_at"):
+        report["note"] = "the quota window reset between measurements; they are not comparable"
+        return report
+    used_before, used_after = before.get("used"), after.get("used")
+    if used_before is None or used_after is None:
+        report["note"] = "a measurement is missing a percentage; no delta is claimed"
+        return report
+    delta = round(float(used_after) - float(used_before), 4)
+    report["delta_used"] = delta
+    if delta < 0:
+        report["note"] = "usage fell (reset or other activity); not attributable to this job"
+        return report
+    report["charge"] = "observed-delta"
+    report["note"] = (
+        "account-level delta only: other concurrent jobs, resets or rounding can "
+        "affect it, so it is not an exact per-job cost"
+    )
+    return report
+
+
 def _next_step(job) -> str | None:
     if job.pending_question:
         return "Muse asked a question: relay it to the user, then muse_job_message."
@@ -325,8 +375,7 @@ async def muse_job_status(job_id: str) -> str:
             recent_events=[e.get("text", "") for e in events],
             quota_before=job.quota_before,
             quota_after=job.quota_after,
-            # Never let a failed job imply it cost nothing.
-            quota_charged=job.quota_after is not None,
+            quota=_quota_report(job),
         )
     except Exception as exc:
         return _err(exc)

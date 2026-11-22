@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-MUSEBIRD_VERSION="${MUSEBIRD_VERSION:-0.1.3}"
+MUSEBIRD_VERSION="${MUSEBIRD_VERSION:-0.1.4}"
 REPO="M1778/infinity-musebird"
 
 say() { printf '%s\n' "$*"; }

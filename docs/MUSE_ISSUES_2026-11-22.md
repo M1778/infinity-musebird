@@ -148,6 +148,99 @@ Both issues are fixed and covered by `tests/test_approval_diagnostics.py`.
 The job remains failed and was **not** retried: the 8-agent run cost real quota, and
 retrying it is the user's decision, not the repair agent's.
 
+## Follow-up verification — 0.1.3 (2026-11-22)
+
+### Installed release versus the running MCP process
+
+- The CLI reports `musebird 0.1.3`; GitHub release `v0.1.3` is published and is not a draft or prerelease.
+- Both the checkout and installed `mcp_server.py` contain the new failure diagnostic fields.
+- This existing Claude Code sessions `muse_job_status` response still omits `error_code`, `thread_url`, `next_step`, `agents`, and `quota_charged`. A Muse MCP process that started before the update is still present. These observations are consistent with the session using the old loaded server; the specific process-to-session mapping was not established.
+- Reconnect `musebird` in `/mcp` before any retry and verify the new status fields through this sessions MCP connection. Installing a new package does not reload modules in an already running process. Do not kill unrelated sessions processes.
+
+### Remaining issue: `quota_charged` represents snapshot availability, not a charge
+
+Verified in the shipped tag and installed source at `src/musebird/mcp_server.py:329`:
+
+```python
+quota_charged=job.quota_after is not None
+```
+
+For the preserved failed job, `quota_after` is null. The new server therefore reports `quota_charged=false`, although no terminal quota measurement exists. Conversely, any non-null snapshot produces true even if it is unchanged from `quota_before`. The boolean measures whether a snapshot was collected, not whether this job consumed quota.
+
+Requested repair:
+
+- Expose measurement availability under an accurate name such as `quota_observed`.
+- Represent the actual charge as unknown unless supported by comparable before/after measurements or an authoritative per-job billing signal. Account-level quota deltas can also include other concurrent jobs, resets, rounding, or cached values; do not silently treat them as exact per-job cost.
+- Keep historical jobs with no terminal snapshot explicitly unknown, not free.
+- Cover missing, unchanged, increased, stale, and reset/incomparable snapshots in tests. Preserve failure-path best-effort capture.
+
+### Timeout fix is sensible; its class-relationship explanation is incorrect
+
+`run_off_loop` now catches both `(asyncio.TimeoutError, TimeoutError)` and normalizes to the built-in exception. That is appropriate for supported versions. However, `src/musebird/offloop.py:56-58`, `tests/test_offloop.py:69`, and the release handoff claim that Python 3.10 `asyncio.TimeoutError` is `CancelledError`.
+
+Verified against the official Python 3.10 documentation and CPython 3.10 source:
+
+- `asyncio.TimeoutError` is a separate `Exception` subclass in 3.10, different from the built-in `TimeoutError`.
+- `asyncio.CancelledError` is a separate `BaseException` subclass. It is not an alias for `asyncio.TimeoutError`.
+- Catching both timeout spellings addresses the pre-3.11 distinction; it does not mean that timeouts and cancellations are the same exception.
+
+References:
+
+- https://docs.python.org/3.10/library/asyncio-exceptions.html
+- https://github.com/python/cpython/blob/v3.10.14/Lib/asyncio/exceptions.py
+
+Requested correction: fix the comment/test docstring/handoff explanation without undoing the working dual-timeout catch. Verify separately that true caller cancellation remains cancellation rather than being converted into a timeout.
+
+### Verification limits
+
+The release and source/installed-file checks above were performed in this session. CI totals, checksums, the new live pending-card behavior, and gameplay were not independently rerun. No replacement job, live pending approval, or quota-consuming game retry was started.
+
+## Resolution of the follow-up review — 0.1.4
+
+Both corrections accepted; verified before changing anything.
+
+### `quota_charged` was measuring the wrong thing
+
+Correct. `quota_after is not None` reports snapshot availability, not a charge. It is
+replaced by:
+
+```json
+"quota": { "observed": false, "charge": "unknown", "delta_used": null,
+           "note": "no terminal quota snapshot was captured, so this job's cost is
+                    unknown, not zero" }
+```
+
+`charge` is `observed-delta` only when a before/after pair exists *and* the quota
+window is the same; even then the note states it is an account-level delta, not
+per-job billing. Falling usage, a reset, or a missing percentage all yield `unknown`.
+Covered by `tests/test_quota_report.py` for missing, unchanged, increased, reset and
+partial snapshots. Checked against the preserved job: `charge: unknown`.
+
+### The 3.10 explanation was wrong
+
+Correct, and re-verified on CPython 3.10.22:
+
+```
+asyncio.TimeoutError is builtin TimeoutError: False
+asyncio.TimeoutError is CancelledError:        False
+MRO: TimeoutError -> Exception -> BaseException
+CancelledError subclasses Exception:           False
+```
+
+The real failure was simpler: until 3.11 the two timeout classes are distinct and
+`asyncio.wait_for` raises the *asyncio* flavour, so catching only the builtin let it
+escape. The dual catch stays; the comment, the test docstring and the changelog are
+corrected. `asyncio.CancelledError` is a `BaseException` and is deliberately not
+caught, and a new test asserts that caller cancellation still surfaces as
+cancellation.
+
+### Stale MCP process
+
+Confirmed as the cause of the old fields appearing in that session: an MCP server
+started before the update keeps its loaded modules. A reconnect picks up the new
+fields; the freshly started server returns `error_code` and `quota` for the preserved
+job.
+
 ## Scope and exclusions
 
 - No repair was implemented and no replacement job was started by this report.
