@@ -307,6 +307,54 @@ The record supplies the existing side-chat URL. Do not reproduce private convers
 
 No repair, terminal-state rewrite, manual web-message workaround, or additional job was attempted. The user approved this one retry only. The failed game deliverable was not implemented locally. The original project files remain unchanged.
 
+## Resolution — 0.1.5 (2026-11-22)
+
+The retry failure is fixed. A plain-text question is no longer completion.
+
+### Classification (deliberately conservative, as requested)
+
+Evidence of asking — any of:
+- explicit confirmation phrases: `do you confirm`, `should I proceed`, `let me know`,
+  `I need your`, `which would you prefer`
+- a trailing question **plus** waiting language: `I haven't started`, `until you
+  confirm`, `before I continue`, `stopping to check`
+- a short reply that is only a question
+
+Explicitly **not** evidence: a bare `?`; a question inside a fenced code block; a
+leading block quote; a reply reporting produced artefacts (`MANIFEST.json`,
+`out.tar.gz`, "attached"). Anything unproven is `ambiguous`, never a silent completion.
+The existing no-output guard is unchanged: `completed` with no files still fails with
+`no_output`.
+
+### Recovery
+
+`muse_job_message` now accepts a `FAILED` job when it has a saved thread and the
+failure was `no_output` or `upstream_error`. It moves the job back to `running` on
+**that same thread**, without re-sending the task and without changing the agent
+count. Guard failures (`guard_violation`, `manifest_error`, …) stay terminal, because
+repeating them only fails again. No automatic retry: resuming always requires an
+explicit user message.
+
+### Startup scope
+
+Muse was stopping to confirm agent count, quota spend and sandbox limits the user had
+already approved. `build_prompt` now receives an `approval_note` and the prompt states
+those facts with "ALREADY APPROVED — do not ask again", while genuinely new decisions
+are still asked.
+
+### Verification
+
+Replaying the two text events from `job_20261122_172637_45f539` through the new
+classifier yields `needs_input` with the real question. 250 tests pass, including the
+live reply, an explicit sentinel, a deliverable containing a question, a question in a
+code fence, a quoted instruction, a plain finished reply, and both resume paths.
+
+### Still open (unchanged by this fix)
+
+- The remote model referenced earlier pasted contracts. Whether that is context
+  leakage or its own phrasing is **not** established; no isolation defect is claimed.
+- The failed job was not retried. Retrying costs quota and is the user's decision.
+
 ## Scope and exclusions
 
 - No repair was implemented and no replacement job was started by this report.

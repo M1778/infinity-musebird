@@ -153,6 +153,18 @@ status reports `{observed, charge, delta_used, note}`:
 Saying "unknown" is required: reporting a missing measurement as zero would tell a user
 an 8-agent run was free.
 
+## Sentinel-less replies (fixed 2026-11-22)
+
+Muse does not always emit `INF-MUSEBIRD-DONE` or `-NEEDS-INPUT`. It may finish, or it
+may stop and ask a plain-text question (`job_20261122_172637_45f539` asked whether to
+spend 8 agents and the job failed as `no_output`).
+
+`prompts/classify.py` decides between `needs_input`, `completed` and `ambiguous` using
+evidence of asking rather than punctuation. Keep it conservative: a question mark alone
+is not a question, deliverables legitimately contain questions, and an unproven case
+must stay `ambiguous`. The no-output guard in the worker is separate and must stay —
+`completed` with zero files is still a failure.
+
 ## Toolchain
 
 - Package: Python 3.10+, `uv` for install and Python provisioning.
