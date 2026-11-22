@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.3 — 2026-11-22
+
+Fixes from a live 8-agent job that failed with no output
+(`job_20261122_072110_f6f857`, report in `docs/MUSE_ISSUES_2026-11-22.md`).
+
+### Fixed
+- **Approval detection looped forever.** The card selector also matched *resolved*
+  cards left in the transcript, so every poll logged "denying" again — 128 identical
+  events in one job, while `muse_job_status` reported healthy `running`. Approvals are
+  now scanned in-page: only visible cards with an enabled decision control count, each
+  distinct card is reported once, the deny click is scoped to that specific card, and
+  its outcome is reported. A card that cannot be dismissed becomes `needs_input` with
+  the request text instead of silent background work.
+- **A blocked job looked alive.** Generic `progress` events reset the no-activity
+  deadline, so a stuck job could run indefinitely. Only real output now counts.
+- **Failures were undiagnosable from MCP.** `muse_job_status` omitted the stored
+  `error_code` and the preserved `thread_url`; it now returns both plus a `next_step`
+  and `quota_charged`.
+- **A failed job reported no quota.** Terminal quota is captured on every failure
+  path, because an 8-agent run costs real quota even when it returns nothing.
+- **Retrieval attempts were invisible.** The events now record how many files the
+  download returned and what was found in the landing directory.
+
+### Added
+- `tests/test_approval_diagnostics.py` — driver-level coverage of the approval branch
+  (pending, resolved, failed click, distinct cards, scan failure) and of the failure
+  diagnostics, including that generic progress cannot mask a blocked job.
+
 ## 0.1.2 — 2026-11-21
 
 Hardened harness integration. A real Claude Code session (infinity-gptkiller-flash)

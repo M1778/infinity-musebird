@@ -116,6 +116,21 @@ Verified 2026-11-21 by running Claude Code against the live MCP server
 | `codex mcp list` lost our entry | Codex rewrites config.toml and drops tables it did not write | the adapter uses `codex mcp add` whenever it targets the same file |
 | One job failed "session not valid" while status was healthy | Muse rotates cookies mid-session; one 401 is not proof | the worker retries the probe before asking the user to log in |
 
+## Approval cards (verified 2026-11-22)
+
+`[data-testid="hatch-inline-approval-card"]` keeps matching cards that were already
+**resolved**: they stay in the transcript with no live decision control. Counting the
+selector therefore reports a pending approval forever — one live job emitted 128
+identical denial events over ten minutes and then failed with no output.
+
+The only reliable pending test is behavioural, so it runs in-page
+(`muse.APPROVAL_SCAN`): the card must be on screen, visible, and contain an **enabled**
+deny/decline control. A decision is clicked inside that specific card, matched by its
+text, and the click result is reported. Cards that cannot be dismissed become
+`needs_input` rather than a loop.
+
+Do not "fix" this by allowing approvals: the privacy default stands.
+
 ## Toolchain
 
 - Package: Python 3.10+, `uv` for install and Python provisioning.

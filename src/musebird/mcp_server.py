@@ -86,6 +86,35 @@ async def _probe_session(driver_name: str) -> dict:
         }
 
 
+#: One-line, actionable advice per failure class. Kept here rather than in the skill
+#: so every consumer of muse_job_status gets the same explanation.
+_NEXT_STEPS = {
+    "no_output": (
+        "Muse finished but nothing was retrievable. Open thread_url to see what it "
+        "produced, and check the events for whether a manifest or attachments appeared."
+    ),
+    "manifest_error": (
+        "Files arrived but did not match their manifest. The landing directory is kept "
+        "for inspection; the job was not merged."
+    ),
+    "login_required": "Run `musebird login`, then start a new job.",
+    "guard_violation": "An upload or a returned bundle failed the guard; see the events.",
+    "quota_exceeded": "Wait for the allowance to reset, or run a smaller job.",
+    "upstream_error": (
+        "Muse reported an error or went quiet. Open thread_url and check the events."
+    ),
+    "driver_unavailable": "Run `musebird doctor` for the missing component.",
+}
+
+
+def _next_step(job) -> str | None:
+    if job.pending_question:
+        return "Muse asked a question: relay it to the user, then muse_job_message."
+    if job.error_code:
+        return _NEXT_STEPS.get(job.error_code, "See the events and thread_url for detail.")
+    return None
+
+
 def _registry() -> JobRegistry:
     return JobRegistry(paths())
 
@@ -284,11 +313,20 @@ async def muse_job_status(job_id: str) -> str:
             elapsed_seconds=round(elapsed, 1),
             pending_question=job.pending_question,
             error=job.error,
+            # A failure the consumer cannot classify is a support ticket waiting to
+            # happen. Surface the stored code and the preserved thread so the user can
+            # inspect the right conversation instead of guessing.
+            error_code=job.error_code,
+            thread_url=job.thread_url,
+            next_step=_next_step(job),
             landing_dir=job.landing_dir,
             branch=job.branch,
+            agents=job.agents,
             recent_events=[e.get("text", "") for e in events],
             quota_before=job.quota_before,
             quota_after=job.quota_after,
+            # Never let a failed job imply it cost nothing.
+            quota_charged=job.quota_after is not None,
         )
     except Exception as exc:
         return _err(exc)

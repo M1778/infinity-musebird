@@ -145,6 +145,8 @@ class Worker:
         self.registry.append_event(job.id, message, kind="error")
         self.registry.update(job.id, state=st.FAILED, error=message, error_code=code)
         self.audit.write("job_failed", job=job.id, code=code)
+        # Quota is best-effort here (the driver may be closed); the attempt is what
+        # matters, and quota_charged in the status exposes whether it succeeded.
 
     def _check_cancel(self) -> None:
         if self.registry.cancel_requested(self.job_id):
@@ -173,7 +175,10 @@ class Worker:
             self._flush_uploads(driver, thread)
             events, cursor = await driver.stream_events(thread, cursor)
             for event in events:
-                last_activity = time.time()
+                # Only real output counts as activity. A repeating "Muse is working"
+                # or an unchanged approval notice must not keep a stuck job alive.
+                if event.kind in ("text", "done", "completed", "needs_input", "file"):
+                    last_activity = time.time()
                 if event.kind in ("done", "completed"):
                     self.registry.append_event(self.job_id, event.text or "reply finished")
                     return True
@@ -257,6 +262,13 @@ class Worker:
         project = Path(job.project or ".").resolve()
         dest = landing.landing_dir(project, job.id)
         downloaded = await driver.download(thread, str(dest))
+        # Record what retrieval actually attempted. "no_output" alone cannot tell a
+        # user whether Muse attached nothing or the download broke.
+        self.registry.append_event(
+            self.job_id,
+            f"retrieval: download returned {len(downloaded)} file(s)",
+            kind="info",
+        )
         # The bundle and the manifest itself are transports, not results: remember
         # their relative names so the unlisted-file check does not flag them.
         transport: set[str] = set()
@@ -298,8 +310,11 @@ class Worker:
                 # an empty success, which is the worst possible outcome.
                 self.registry.append_event(
                     self.job_id,
-                    "Muse finished but no files were retrievable (no attachments and "
-                    "no manifest)",
+                    (
+                        "no files retrievable: download returned "
+                        f"{len(downloaded)}, no manifest found, "
+                        f"no archive extracted ({len(list(dest.rglob('*')))} path(s) exist)"
+                    ),
                     kind="error",
                 )
                 self.registry.update(
@@ -310,6 +325,8 @@ class Worker:
                     ),
                     error_code="no_output",
                     landing_dir=str(dest),
+                    # An 8-agent run is expensive even when it returns nothing.
+                    quota_after=await self._safe_quota(driver),
                 )
                 self.audit.write("job_failed", job=job.id, code="no_output")
                 return self.registry.get(job.id)
@@ -349,6 +366,7 @@ class Worker:
             self.registry.update(
                 job.id, state=st.FAILED, error="manifest verification failed",
                 error_code="manifest_error", landing_dir=str(source),
+                quota_after=await self._safe_quota(driver),
             )
             self.audit.write("job_failed", job=job.id, code="manifest_error")
             return self.registry.get(job.id)

@@ -100,6 +100,11 @@ SELECTORS = {
     # "Send" label finds nothing, which is why the driver presses Enter first.
     "send_button": 'button[aria-label*="Send" i], button[data-testid*="send" i]',
     "stop_button": 'button[aria-label*="Stop" i]',
+    # Approval cards. Verified 2026-11-22: `[data-testid="hatch-inline-approval-card"]`
+    # also matches *resolved* cards left in the transcript, so a plain count() reports
+    # a pending request forever (128 identical "denying" events in one job). A card
+    # counts as pending only while it is on screen, visible, and still carries an
+    # enabled decision control — evaluated in-page, because CSS cannot express that.
     "approval_card": '[data-testid="hatch-inline-approval-card"]',
     "approval_deny": 'button[aria-label*="Deny" i], button[aria-label*="Decline" i]',
     "settings_dock": '[data-testid="hatch-dock-more"]',
@@ -126,6 +131,51 @@ FILE_CARD_PREFIX = "hatch-chat-file-card-"
 
 # Plausible values Muse reports; used only to normalise, never to hard-code.
 PLAN_NAMES = ("Free", "Power", "Maximum")
+
+#: In-page scan for genuinely pending approval cards. Returns one record per card:
+#: a stable key (testid + text hash), the visible text, and whether an enabled deny
+#: control was found. Resolved/hidden cards are excluded by construction.
+APPROVAL_SCAN = """(sel) => {
+  const visible = (e) => e.getClientRects().length > 0
+      && getComputedStyle(e).visibility !== 'hidden'
+      && getComputedStyle(e).display !== 'none';
+  const out = [];
+  for (const card of document.querySelectorAll(sel)) {
+    if (!visible(card)) continue;
+    const deny = [...card.querySelectorAll('button,[role=button]')].find(b => {
+      const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).trim();
+      return /^(deny|decline|reject|don.t allow)/i.test(label) && !b.disabled && visible(b);
+    });
+    if (!deny) continue;  // resolved card: no live decision control
+    const text = (card.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300);
+    out.push({
+      key: (card.getAttribute('data-testid') || '') + ':' + text,
+      text,
+      hasDeny: true,
+    });
+  }
+  return out;
+}"""
+
+#: Click deny inside one specific card, matched by its text, so a decision can never
+#: land on a different request than the one we reported.
+APPROVAL_DENY_IN_CARD = """([sel, needle]) => {
+  const visible = (e) => e.getClientRects().length > 0
+      && getComputedStyle(e).display !== 'none';
+  for (const card of document.querySelectorAll(sel)) {
+    if (!visible(card)) continue;
+    const text = (card.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300);
+    if (text !== needle) continue;
+    const deny = [...card.querySelectorAll('button,[role=button]')].find(b => {
+      const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).trim();
+      return /^(deny|decline|reject|don.t allow)/i.test(label) && !b.disabled && visible(b);
+    });
+    if (!deny) return { clicked: false, reason: 'no-enabled-deny' };
+    deny.click();
+    return { clicked: true };
+  }
+  return { clicked: false, reason: 'card-gone' };
+}"""
 
 POLL_INTERVAL_S = 0.15
 STABLE_POLLS_DONE = 4

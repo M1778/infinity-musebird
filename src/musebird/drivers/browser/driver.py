@@ -51,6 +51,7 @@ class BrowserDriver(MuseDriver):
         self._profile_lock = None
         self._filenames: list[str] = []
         self._settled = False
+        self._approvals_seen: set[str] = set()
 
     # -- lifecycle -------------------------------------------------------
     async def _launch(self) -> None:
@@ -405,6 +406,65 @@ class BrowserDriver(MuseDriver):
             return bubbles[-1]
         return "\n".join(bubbles[-2:]) if len(bubbles) > 1 else bubbles[-1]
 
+    async def _handle_approvals(self) -> list[DriverEvent]:
+        """Deny pending approval cards, once each, and report honestly.
+
+        Live failure this replaces (2026-11-22 job_20261122_072110_f6f857): the card
+        selector also matches *resolved* cards, so the old code logged "denying" on
+        every 5s poll for 10+ minutes — 128 identical events — while the job looked
+        healthy. Nothing said what was being approved, whether the click worked, or
+        that a human decision was actually needed.
+
+        Rules now:
+          * only genuinely pending cards count (visible, with an enabled deny control)
+          * each distinct card is reported once; repeats are silent
+          * the deny click is scoped to that card and its outcome is reported
+          * if denying keeps failing, ask the user instead of looping forever
+        """
+        events: list[DriverEvent] = []
+        try:
+            cards = await self._page.evaluate(muse.APPROVAL_SCAN, muse.SELECTORS["approval_card"])
+        except Exception:
+            return events
+        for card in cards or []:
+            key = str(card.get("key", ""))
+            if not key or key in self._approvals_seen:
+                continue
+            self._approvals_seen.add(key)
+            summary = str(card.get("text", "")).replace("\n", " ").strip()[:200]
+            result = {"clicked": False, "reason": "not attempted"}
+            for _attempt in range(1, 3):
+                try:
+                    result = await self._page.evaluate(
+                        muse.APPROVAL_DENY_IN_CARD, [muse.SELECTORS["approval_card"], card.get("text", "")]
+                    ) or result
+                except Exception as exc:
+                    result = {"clicked": False, "reason": type(exc).__name__}
+                if result.get("clicked"):
+                    break
+                await asyncio.sleep(0.5)
+            if result.get("clicked"):
+                self.notify(f"denied an approval request: {summary[:120]}")
+                events.append(
+                    DriverEvent(
+                        "info",
+                        f"denied a Muse approval request: {summary[:160]}",
+                    )
+                )
+            else:
+                # A card we cannot dismiss is a real blocker, not background work.
+                self.notify(f"approval could not be denied: {result.get('reason')}")
+                events.append(
+                    DriverEvent(
+                        "needs_input",
+                        f"{muse.NEEDS_INPUT_SENTINEL} {self.job_id}: Muse is waiting on an "
+                        f"approval this tool declines by policy ({result.get('reason')}). "
+                        f"Request: {summary[:160]}. Approve or deny it in the Muse thread, "
+                        f"then reply here.",
+                    )
+                )
+        return events
+
     async def _generating(self) -> bool:
         try:
             return await self._page.locator(muse.SELECTORS["stop_button"]).count() > 0
@@ -431,12 +491,7 @@ class BrowserDriver(MuseDriver):
         else:
             self._stable += 1
         generating = await self._generating()
-        if await self._page.locator(muse.SELECTORS["approval_card"]).count():
-            events.append(
-                DriverEvent("info", "Muse is asking for approval; denying (privacy default)")
-            )
-            with contextlib.suppress(Exception):
-                await self._page.locator(muse.SELECTORS["approval_deny"]).first.click(timeout=3000)
+        events.extend(await self._handle_approvals())
         if not generating and self._stable >= muse.STABLE_POLLS_DONE and self._last_text:
             from musebird.prompts import parse_sentinel
 
