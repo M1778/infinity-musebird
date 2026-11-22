@@ -129,6 +129,25 @@ A landing-directory path was recorded, but no retrievable deliverable or review 
 - Missing/failed attachments and an absent manifest produce `failed/no_output`, never a completed empty deliverable.
 - Approval-blocked and retrieval-failed outcomes remain distinguishable; neither is silently retried.
 
+## Resolution — 0.1.3 (2026-11-22)
+
+Both issues are fixed and covered by `tests/test_approval_diagnostics.py`.
+
+1. **Approval loop.** The selector matched resolved cards. Pending is now decided
+   behaviourally in-page (visible + live decision control). Re-checked against the
+   preserved thread: 0 pending, where the old code reported one on every poll.
+   Policy per user direction: a card with **no input controls is approved** (an
+   acknowledgement, not a question); a card with **input controls is declined**
+   (answering it would invent the user's intent); anything unresolvable becomes
+   `needs_input` with the request text.
+2. **Failure diagnostics.** `muse_job_status` now returns `error_code`, `thread_url`,
+   `next_step` and `quota_charged`; terminal quota is captured on every failure path;
+   retrieval events record how many files the download returned; generic progress no
+   longer resets the no-activity deadline.
+
+The job remains failed and was **not** retried: the 8-agent run cost real quota, and
+retrying it is the user's decision, not the repair agent's.
+
 ## Scope and exclusions
 
 - No repair was implemented and no replacement job was started by this report.

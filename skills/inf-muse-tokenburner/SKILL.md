@@ -81,3 +81,10 @@ Then ask before merging, same as `/inf-muse`.
     file in the project.
   - Do not finish a failed job yourself. Report the failure and stop.
   - If the user wants the files in their tree, they merge the branch. That is their call.
+
+- **Approval cards are handled for you, and there is nothing to relay.** A card that
+  asks for no input is an acknowledgement: the driver approves it so the build keeps
+  moving. A card that asks for input is a real decision: the driver declines it rather
+  than inventing an answer for the user. If a card can be neither approved nor
+  declined, the job becomes `needs_input` with the request text — ask the user, then
+  relay their answer with `muse_job_message`.

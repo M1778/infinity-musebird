@@ -152,30 +152,56 @@ APPROVAL_SCAN = """(sel) => {
       key: (card.getAttribute('data-testid') || '') + ':' + text,
       text,
       hasDeny: true,
+      // A card with input controls asks a question; one without is an
+      // acknowledgement. The distinction decides allow-vs-deny.
+      needsInput: [...card.querySelectorAll(
+        'input:not([type=hidden]), textarea, select, [contenteditable="true"]'
+      )].some(visible),
     });
   }
   return out;
 }"""
 
-#: Click deny inside one specific card, matched by its text, so a decision can never
-#: land on a different request than the one we reported.
-APPROVAL_DENY_IN_CARD = """([sel, needle]) => {
+#: Click a decision inside one specific card, matched by its text, so a click can
+#: never land on a different request than the one we reported.
+#:
+#: Policy (user direction, 2026-11-22): a card with **no input controls** is an
+#: acknowledgement, not a decision — approving it is safe and keeps a build moving.
+#: A card that asks for input (a form, a choice, a field) is a real decision and is
+#: *denied* by default, because answering it would mean inventing the user's intent.
+APPROVAL_DECIDE_IN_CARD = """([sel, needle, allowIfNoInputs]) => {
   const visible = (e) => e.getClientRects().length > 0
       && getComputedStyle(e).display !== 'none';
+  const label = (b) => ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || ''))
+      .trim().toLowerCase();
   for (const card of document.querySelectorAll(sel)) {
     if (!visible(card)) continue;
     const text = (card.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 300);
     if (text !== needle) continue;
-    const deny = [...card.querySelectorAll('button,[role=button]')].find(b => {
-      const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).trim();
-      return /^(deny|decline|reject|don.t allow)/i.test(label) && !b.disabled && visible(b);
-    });
-    if (!deny) return { clicked: false, reason: 'no-enabled-deny' };
-    deny.click();
-    return { clicked: true };
+    const inputs = [...card.querySelectorAll(
+      'input:not([type=hidden]), textarea, select, [contenteditable="true"]'
+    )].filter(visible);
+    const buttons = [...card.querySelectorAll('button,[role=button]')]
+      .filter(b => !b.disabled && visible(b));
+    const find = (re) => buttons.find(b => re.test(label(b)));
+    const needsInput = inputs.length > 0;
+    if (!needsInput && allowIfNoInputs) {
+      // Acknowledge a no-input card: prefer an affirmative control, else any enabled
+      // button that is not an explicit refusal.
+      const yes = find(/^(allow|approve|accept|continue|ok|yes|confirm)/)
+        || buttons.find(b => !/^(deny|decline|reject|don.t allow)/.test(label(b)));
+      if (yes) { yes.click(); return { clicked: true, action: 'allowed-no-input' }; }
+      return { clicked: false, reason: 'no-affirmative-control', needsInput: false };
+    }
+    const deny = find(/^(deny|decline|reject|don.t allow)/);
+    if (deny) { deny.click(); return { clicked: true, action: 'denied-needs-input', needsInput: true }; }
+    return { clicked: false, reason: 'no-enabled-deny', needsInput: true };
   }
   return { clicked: false, reason: 'card-gone' };
 }"""
+
+#: Retained name for callers/tests that only care about the deny path.
+APPROVAL_DENY_IN_CARD = APPROVAL_DECIDE_IN_CARD
 
 POLL_INTERVAL_S = 0.15
 STABLE_POLLS_DONE = 4

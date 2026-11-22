@@ -415,11 +415,17 @@ class BrowserDriver(MuseDriver):
         healthy. Nothing said what was being approved, whether the click worked, or
         that a human decision was actually needed.
 
-        Rules now:
-          * only genuinely pending cards count (visible, with an enabled deny control)
+        Policy (user direction, 2026-11-22): a card with **no input controls** is an
+        acknowledgement, so it is approved automatically — that keeps a build moving
+        without inventing an answer. A card that asks for input is a real decision and
+        is denied by default, because answering it would mean guessing the user's intent.
+        A card that can be neither allowed nor denied becomes `needs_input`.
+
+        Rules:
+          * only genuinely pending cards count (visible, with a live decision control)
           * each distinct card is reported once; repeats are silent
-          * the deny click is scoped to that card and its outcome is reported
-          * if denying keeps failing, ask the user instead of looping forever
+          * the click is scoped to that card, and its outcome is reported
+          * a card that cannot be resolved asks the user instead of looping forever
         """
         events: list[DriverEvent] = []
         try:
@@ -436,7 +442,8 @@ class BrowserDriver(MuseDriver):
             for _attempt in range(1, 3):
                 try:
                     result = await self._page.evaluate(
-                        muse.APPROVAL_DENY_IN_CARD, [muse.SELECTORS["approval_card"], card.get("text", "")]
+                        muse.APPROVAL_DECIDE_IN_CARD,
+                        [muse.SELECTORS["approval_card"], card.get("text", ""), True],
                     ) or result
                 except Exception as exc:
                     result = {"clicked": False, "reason": type(exc).__name__}
@@ -444,13 +451,24 @@ class BrowserDriver(MuseDriver):
                     break
                 await asyncio.sleep(0.5)
             if result.get("clicked"):
-                self.notify(f"denied an approval request: {summary[:120]}")
-                events.append(
-                    DriverEvent(
-                        "info",
-                        f"denied a Muse approval request: {summary[:160]}",
+                action = result.get("action", "")
+                if action == "allowed-no-input":
+                    self.notify(f"approved a no-input request: {summary[:120]}")
+                    events.append(
+                        DriverEvent(
+                            "info",
+                            f"approved a Muse request that asks for no input: {summary[:160]}",
+                        )
                     )
-                )
+                else:
+                    self.notify(f"denied a request that needs input: {summary[:120]}")
+                    events.append(
+                        DriverEvent(
+                            "info",
+                            "declined a Muse request that asks for input, because answering "
+                            f"it would guess the user's intent: {summary[:160]}",
+                        )
+                    )
             else:
                 # A card we cannot dismiss is a real blocker, not background work.
                 self.notify(f"approval could not be denied: {result.get('reason')}")

@@ -50,21 +50,22 @@ async def test_no_cards_means_no_approval_events():
 
 
 @pytest.mark.asyncio
-async def test_a_pending_card_is_reported_once_and_denied():
+async def test_a_no_input_card_is_approved_once_and_then_silent():
+    """A card with no input controls is an acknowledgement, so allow it."""
     calls: list[tuple] = []
 
     class Page:
         async def evaluate(self, script, arg=None):
             if script == muse.APPROVAL_SCAN:
-                return [{"key": "card-1:Run bash ls", "text": "Run bash ls", "hasDeny": True}]
+                return [{"key": "card-1:Run bash ls", "text": "Run bash ls", "needsInput": False}]
             calls.append(tuple(arg))
-            return {"clicked": True}
+            return {"clicked": True, "action": "allowed-no-input"}
 
     d = _driver(Page())
     first = await d._handle_approvals()
     assert len(first) == 1
     assert first[0].kind == "info"
-    assert "denied a Muse approval request" in first[0].text
+    assert "no input" in first[0].text
     assert "Run bash ls" in first[0].text
     # The click was scoped to the identified card, not "first on the page".
     assert calls and calls[0][1] == "Run bash ls"
@@ -72,6 +73,25 @@ async def test_a_pending_card_is_reported_once_and_denied():
     # Unchanged card: silent on every later poll (this is what flooded the log).
     second = await d._handle_approvals()
     assert second == []
+
+
+@pytest.mark.asyncio
+async def test_a_card_that_needs_input_is_declined():
+    """Answering a form would mean inventing the user's intent, so decline it."""
+    seen: list[tuple] = []
+
+    class Page:
+        async def evaluate(self, script, arg=None):
+            if script == muse.APPROVAL_SCAN:
+                return [{"key": "c:Choose a framework", "text": "Choose a framework",
+                         "needsInput": True}]
+            seen.append(tuple(arg))
+            return {"clicked": True, "action": "denied-needs-input", "needsInput": True}
+
+    events = await _driver(Page())._handle_approvals()
+    assert len(events) == 1
+    assert "asks for input" in events[0].text
+    assert seen and seen[0][1] == "Choose a framework"
 
 
 @pytest.mark.asyncio

@@ -7,12 +7,20 @@ Fixes from a live 8-agent job that failed with no output
 
 ### Fixed
 - **Approval detection looped forever.** The card selector also matched *resolved*
-  cards left in the transcript, so every poll logged "denying" again — 128 identical
+  cards left in the transcript, so every poll logged a decision again — 128 identical
   events in one job, while `muse_job_status` reported healthy `running`. Approvals are
-  now scanned in-page: only visible cards with an enabled decision control count, each
-  distinct card is reported once, the deny click is scoped to that specific card, and
-  its outcome is reported. A card that cannot be dismissed becomes `needs_input` with
-  the request text instead of silent background work.
+  now scanned in-page: only visible cards with a live decision control count, each
+  distinct card is reported once, and the click is scoped to that specific card with
+  its outcome reported. Verified against the failed thread: 0 pending now, where the
+  old count reported one on every poll.
+- **Approval policy (user direction).** A card with no input controls is an
+  acknowledgement, so it is **approved** automatically to keep a build moving. A card
+  that asks for input is a real decision and is **declined**, because answering it
+  would mean inventing the user's intent. A card that can be neither approved nor
+  declined becomes `needs_input` with the request text.
+- **Python 3.10 timeout.** `run_off_loop` caught only the builtin `TimeoutError`, but
+  on 3.10 `asyncio.TimeoutError` is `CancelledError`, so a timeout re-raised as a
+  cancellation. Both spellings are now caught — this failed CI on every 3.10 job.
 - **A blocked job looked alive.** Generic `progress` events reset the no-activity
   deadline, so a stuck job could run indefinitely. Only real output now counts.
 - **Failures were undiagnosable from MCP.** `muse_job_status` omitted the stored

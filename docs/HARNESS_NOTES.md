@@ -129,7 +129,16 @@ deny/decline control. A decision is clicked inside that specific card, matched b
 text, and the click result is reported. Cards that cannot be dismissed become
 `needs_input` rather than a loop.
 
-Do not "fix" this by allowing approvals: the privacy default stands.
+### Decision policy (user direction, 2026-11-22)
+
+- **No input controls → approve.** Such a card is an acknowledgement, not a question;
+  approving keeps the build moving.
+- **Has input controls → decline.** Answering a form would mean inventing the user's
+  intent, which the tool must never do.
+- **Neither control works → `needs_input`** with the request text, so the user decides.
+
+Verified in-page by counting visible `input`/`textarea`/`select`/`contenteditable`
+elements inside the card; no Muse-specific markup assumption beyond that.
 
 ## Toolchain
 

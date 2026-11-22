@@ -52,7 +52,10 @@ async def run_off_loop(
     wrapped = asyncio.wrap_future(future)
     try:
         return await asyncio.wait_for(wrapped, timeout=timeout)
-    except TimeoutError as exc:
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        # On Python 3.10 `asyncio.TimeoutError` is `CancelledError`, not the builtin
+        # `TimeoutError`, so catching only the builtin silently re-raised a
+        # cancellation. Both spellings are listed for 3.10 through 3.12.
         raise TimeoutError(
             "the browser did not finish in time; run `musebird doctor --selftest` in a "
             "terminal to see what it is waiting on"

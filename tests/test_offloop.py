@@ -62,3 +62,20 @@ async def test_a_timeout_does_not_leak_a_hanging_thread():
 
     with pytest.raises(TimeoutError):
         await run_off_loop(slow, timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_a_timeout_on_every_supported_python():
+    """Python 3.10 aliases asyncio.TimeoutError to CancelledError, not TimeoutError."""
+    import sys
+
+    async def slow():
+        await asyncio.sleep(30)
+
+    try:
+        await run_off_loop(slow, timeout=0.1)
+    except TimeoutError as exc:
+        assert "did not finish in time" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected a timeout")
+    assert sys.version_info >= (3, 10)
